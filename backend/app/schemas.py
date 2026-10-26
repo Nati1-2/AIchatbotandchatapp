@@ -55,3 +55,4 @@ class AIInput(BaseModel):
     body: str = Field(min_length=1, max_length=8000)
     selected_ids: list[UUID] = Field(default_factory=list, max_length=30)
     selected_snapshots: dict[str, str] = Field(default_factory=dict, max_length=30)
+    voice: bool = False  # the reply will be read aloud in voice mode

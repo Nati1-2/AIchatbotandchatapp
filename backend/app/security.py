@@ -61,7 +61,11 @@ async def new_session(db, user, response):
         max_age=settings.session_days * 86400,
         path="/",
     )
-    return {"user": public_user(user), "csrf": csrf}
+    return {
+        "user": public_user(user),
+        "csrf": csrf,
+        "ai_configured": bool(settings.ai_api_key),
+    }
 
 
 def public_user(user):

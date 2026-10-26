@@ -10,7 +10,7 @@ Requirements: Docker Engine running and Docker Compose v2. From this repository 
 docker compose -f infra/compose.yaml up --build
 ```
 
-Open **http://localhost:3000**. The first build downloads dependencies; the migration and development seed run automatically. API documentation: **http://localhost:8000/docs**. MinIO console: **http://localhost:9001** (development credentials `relay-local` / `relay-local-secret`). The attachment bucket is private.
+Open **http://localhost:3000**. The first build downloads dependencies; the migration and development seed run automatically. API documentation: **http://localhost:8000/docs**. Storage (RustFS, S3-compatible) console: **http://localhost:9001** (development credentials `relay-local` / `relay-local-secret`). The attachment bucket is private.
 
 Development accounts:
 
@@ -50,10 +50,19 @@ docker compose -f infra/compose.yaml down
 Use Node.js 24 and Python 3.12+. Install [uv](https://docs.astral.sh/uv/getting-started/installation/). Run PostgreSQL, Redis and an S3-compatible service first; create a private `relay-private` bucket. The Compose infrastructure services can be started independently:
 
 ```sh
-docker compose -f infra/compose.yaml up -d postgres redis minio storage-init
+docker compose -f infra/compose.yaml up -d postgres redis storage
+(cd backend && uv run python -m app.storage_init)  # creates the private bucket
 ```
 
-Backend, in one terminal:
+Or start the backend API, worker and frontend together in one terminal (creates `.env` files, installs dependencies and runs migrations if needed; Ctrl+C stops everything):
+
+```sh
+npm run dev         # backend API + worker + frontend
+npm run dev:infra   # same, and first starts postgres/redis/storage with Docker
+npm run dev:lite    # no Docker: temporary SQLite, in-memory Redis/storage, mocked AI; data is lost on exit
+```
+
+To run them separately instead, start the backend in one terminal:
 
 ```sh
 cd backend

@@ -12,6 +12,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { Button } from "./ui/button";
+import { ThemeToggle } from "./theme";
 import { mutate, setCsrf } from "@/lib/api";
 import type { User } from "@/lib/types";
 const schema = z.object({
@@ -24,6 +25,10 @@ const schema = z.object({
   password: z.string().min(10, "Use at least 10 characters.").max(128),
   display_name: z.string().max(80),
 });
+// Accounts created by backend/app/seed.py, which only runs in development.
+const DEMO_PASSWORD = "Relay-demo-2026!";
+const DEMO_USERS = ["alex", "jordan"];
+const SHOW_DEMO = process.env.NODE_ENV === "development";
 export function Brand() {
   return (
     <span className="brand">
@@ -94,6 +99,7 @@ export function Auth({ onSuccess }: { onSuccess: () => void }) {
         </div>
       </section>
       <section className="auth-form-panel">
+        <ThemeToggle className="auth-theme-toggle" />
         <div className="auth-form">
           <span className="eyebrow">YOUR NEXT CONVERSATION AWAITS</span>
           <h2>{register ? "Make yourself at home." : "Welcome back."}</h2>
@@ -156,6 +162,29 @@ export function Auth({ onSuccess }: { onSuccess: () => void }) {
               )}
             </Button>
           </form>
+          {SHOW_DEMO && !register && (
+            <div className="auth-demo">
+              <span>Demo login</span>
+              {DEMO_USERS.map((username) => (
+                <Button
+                  key={username}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={form.formState.isSubmitting}
+                  onClick={() =>
+                    submit({
+                      username,
+                      password: DEMO_PASSWORD,
+                      display_name: "",
+                    })
+                  }
+                >
+                  {username[0].toUpperCase() + username.slice(1)}
+                </Button>
+              ))}
+            </div>
+          )}
           <p className="auth-switch">
             {register ? "Already part of Relay?" : "New around here?"}{" "}
             <button

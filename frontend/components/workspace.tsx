@@ -23,6 +23,7 @@ import { Brand } from "./auth";
 import { Button } from "./ui/button";
 import { Dialog } from "./ui/dialog";
 import { Chat } from "./chat";
+import { ThemeToggle } from "./theme";
 export function Avatar({
   name,
   ai = false,
@@ -192,14 +193,17 @@ export function Workspace({
       <aside className="sidebar">
         <div className="sidebar-brand">
           <Brand />
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Account settings"
-            onClick={() => setModal("settings")}
-          >
-            <SlidersHorizontal size={19} />
-          </Button>
+          <span className="sidebar-brand-actions">
+            <ThemeToggle />
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Account settings"
+              onClick={() => setModal("settings")}
+            >
+              <SlidersHorizontal size={19} />
+            </Button>
+          </span>
         </div>
         <div className="sidebar-title">
           <h1>

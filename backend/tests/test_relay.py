@@ -344,3 +344,25 @@ async def test_concurrent_retry_postgres(clients, env):
     assert all(r.status_code == 200 for r in responses)
     assert responses[0].json()["id"] == responses[1].json()["id"]
     assert len((await a.get(f"/conversations/{cid}/messages")).json()["items"]) == 1
+
+
+async def test_ai_voice_mode_asks_for_spoken_replies(clients, env, monkeypatch):
+    a, _, _ = clients
+    cid = (await a.post("/conversations", json={"kind": "ai"})).json()["id"]
+    monkeypatch.setattr(settings, "ai_api_key", "test-only")
+    prompts = []
+
+    class RecordingProvider:
+        async def stream(self, messages):
+            prompts.append(messages[0]["content"])
+            yield {"delta": "Sure."}
+
+    monkeypatch.setattr(ai, "provider", RecordingProvider())
+    for voice in (False, True):
+        res = await a.post(
+            f"/conversations/{cid}/ai/stream",
+            json={"client_id": str(uuid4()), "body": "Hi", "voice": voice},
+        )
+        assert "event: done" in res.text
+    assert "read aloud" not in prompts[0]
+    assert "read aloud" in prompts[1]

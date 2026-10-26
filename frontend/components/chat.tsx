@@ -23,7 +23,20 @@ import {
   FileText,
   LoaderCircle,
   CheckSquare,
+  Mic,
+  AudioLines,
+  Volume2,
+  Sparkles,
 } from "lucide-react";
+import {
+  useSpeechRecognition,
+  useMicLevel,
+  speak,
+  cancelSpeech,
+  createSpeaker,
+  speechSupported,
+} from "@/lib/voice";
+import { VoiceLive, type VoiceState } from "./voice-live";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -125,6 +138,40 @@ export function Chat({
     body: string;
     client_id: string;
   } | null>(null);
+  // Voice: dictation into the composer, or a hands-free AI conversation ("voice mode").
+  const [voice, setVoice] = useState<VoiceState>("off");
+  const [heard, setHeard] = useState("");
+  const [caption, setCaption] = useState("");
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const voiceOn = useRef(false);
+  const held = useRef(false);
+  const interrupted = useRef(false);
+  const speaker = useRef<ReturnType<typeof createSpeaker> | null>(null);
+  const micLevel = useMicLevel(voice === "listening");
+  const dictationBase = useRef("");
+  const streamed = useRef("");
+  const recognition = useSpeechRecognition({
+    onResult: (text) => {
+      if (voiceOn.current) setHeard(text);
+      else setBody((dictationBase.current + " " + text).trim());
+    },
+    onEnd: (finalText) => {
+      if (!voiceOn.current || held.current) return;
+      if (finalText) void voiceTurn(finalText);
+      else recognition.start(); // heard nothing: keep listening
+    },
+    onError: (code) => {
+      if (code === "no-speech" || code === "aborted") return;
+      endVoice();
+      setError(
+        code === "not-allowed" || code === "service-not-allowed"
+          ? "Microphone access is blocked. Allow it in your browser to use voice."
+          : code === "network"
+            ? "Voice input needs an internet connection."
+            : "Voice input stopped (" + code + ").",
+      );
+    },
+  });
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -242,31 +289,40 @@ export function Chat({
     }
   }
   async function askAI(
-    prompt: { body: string; client_id: string },
-    selected_ids: string[] = [],
+    prompt: { body: string; client_id: string; voice?: boolean },
+    onDelta?: (text: string) => void,
   ) {
     setBody("");
     setError("");
     setRetryPrompt(prompt);
     setStream("");
+    streamed.current = "";
     stick.current = true;
     abort.current = new AbortController();
     try {
       await streamAI(
         c.id,
-        { ...prompt, selected_ids },
+        prompt,
         (type, data) => {
           if (type === "start") {
             setGeneration(String(data.generation_id));
             void history.refetch();
           }
-          if (type === "delta") setStream((old) => (old || "") + data.text);
-          if (type === "error") setError(String(data.message));
+          if (type === "delta") {
+            streamed.current += String(data.text);
+            setStream((old) => (old || "") + data.text);
+            onDelta?.(String(data.text));
+          }
+          if (type === "error") {
+            streamed.current = "";
+            setError(String(data.message));
+          }
           if (type === "done") setRetryPrompt(null);
         },
         abort.current.signal,
       );
     } catch (e) {
+      streamed.current = "";
       if ((e as Error).name !== "AbortError") setError((e as Error).message);
     } finally {
       setStream(null);
@@ -274,11 +330,115 @@ export function Chat({
       await history.refetch();
       void qc.invalidateQueries({ queryKey: ["conversations"] });
     }
+    return streamed.current;
   }
   async function stop() {
     if (generation) await mutate(`/ai/generations/${generation}/stop`, {});
     abort.current?.abort();
   }
+  // Voice mode: listen → send on pause → speak the reply as it streams → listen again.
+  async function voiceTurn(text: string) {
+    setVoice("thinking");
+    setCaption("");
+    const out = createSpeaker();
+    speaker.current = out;
+    const answer = await askAI(
+      { body: text, client_id: crypto.randomUUID(), voice: true },
+      (delta) => {
+        out.push(delta);
+        setCaption((old) => old + delta);
+        setVoice((v) => (v === "thinking" ? "speaking" : v));
+      },
+    );
+    if (interrupted.current) {
+      interrupted.current = false;
+      out.cancel();
+      if (voiceOn.current && !held.current) listen();
+      return;
+    }
+    if (!voiceOn.current || held.current) return out.cancel();
+    if (!answer) {
+      out.cancel();
+      return endVoice(); // the error is already shown
+    }
+    setVoice("speaking");
+    await out.finish();
+    if (speaker.current === out) speaker.current = null;
+    if (voiceOn.current && !held.current) listen();
+  }
+  function listen() {
+    setHeard("");
+    setVoice("listening");
+    recognition.start();
+  }
+  function startVoice() {
+    if (!aiConfigured) {
+      setError("Set AI_API_KEY on the server to enable Relay AI.");
+      return;
+    }
+    if (recognition.listening) recognition.abort(); // stop dictation
+    cancelSpeech();
+    if (speechSupported()) window.speechSynthesis.getVoices(); // loads voices early
+    setSpeakingId(null);
+    setError("");
+    voiceOn.current = true;
+    held.current = false;
+    setCaption("");
+    listen();
+  }
+  // Silences the reply and stops generating it, so the next turn isn't blocked.
+  function silence() {
+    speaker.current?.cancel();
+    speaker.current = null;
+    if (stream !== null) {
+      interrupted.current = true;
+      void stop().catch(() => {});
+    }
+  }
+  function endVoice() {
+    voiceOn.current = false;
+    held.current = false;
+    recognition.abort();
+    silence();
+    cancelSpeech();
+    setVoice("off");
+    setHeard("");
+    setCaption("");
+  }
+  function holdVoice() {
+    held.current = true;
+    recognition.abort();
+    silence();
+    setVoice("held");
+  }
+  function resumeVoice() {
+    held.current = false;
+    listen();
+  }
+  function interruptSpeech() {
+    silence(); // voiceTurn then resumes listening
+  }
+  function toggleDictation() {
+    if (recognition.listening) return recognition.stop();
+    dictationBase.current = body;
+    recognition.start();
+  }
+  async function readAloud(m: Message) {
+    if (speakingId === m.id) {
+      cancelSpeech();
+      return;
+    }
+    setSpeakingId(m.id);
+    await speak(m.body);
+    setSpeakingId((id) => (id === m.id ? null : id));
+  }
+  useEffect(
+    () => () => {
+      voiceOn.current = false;
+      cancelSpeech();
+    },
+    [],
+  );
   async function attach(f: File) {
     setError("");
     if (f.size > 10 * 1024 * 1024) {
@@ -373,7 +533,7 @@ export function Chat({
             })
           : "Direct message";
   return (
-    <section className="chat">
+    <section className={`chat ${ai ? "chat-ai" : ""}`}>
       <header className="chat-header">
         <Button
           variant="ghost"
@@ -509,7 +669,46 @@ export function Chat({
               <Button onClick={() => void history.refetch()}>Try again</Button>
             </div>
           )}
-          {!history.isPending && messages.length === 0 && (
+          {!history.isPending && messages.length === 0 && ai && (
+            <div className="ai-hello">
+              <h3>
+                <span className="gradient-text">
+                  Hello, {user.display_name.split(" ")[0]}
+                </span>
+                <span>How can I help you today?</span>
+              </h3>
+              {!aiConfigured ? (
+                <div className="config-note">
+                  Relay AI isn’t configured yet. Set <code>AI_API_KEY</code> on
+                  the server to connect a model. No simulated responses are
+                  shown.
+                </div>
+              ) : (
+                <>
+                  <div className="ai-cards">
+                    {[
+                      ["Plan", "Help me organize my week"],
+                      ["Learn", "Explain a complex idea simply"],
+                      ["Write", "Help me write a thoughtful message"],
+                      ["Brainstorm", "Give me ideas for a weekend project"],
+                    ].map(([tag, p]) => (
+                      <button key={p} onClick={() => setBody(p)}>
+                        <span>{p}</span>
+                        <small>{tag}</small>
+                      </button>
+                    ))}
+                  </div>
+                  {recognition.supported && (
+                    <button className="ai-live-cta" onClick={startVoice}>
+                      <AudioLines size={18} />
+                      Talk it through with Live
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          {!history.isPending && messages.length === 0 && !ai && (
             <div className="chat-empty">
               <div className="welcome-mark">
                 <ArrowUpRight size={32} />
@@ -580,6 +779,11 @@ export function Chat({
                   <article
                     className={`message-row ${own ? "own" : ""} ${selected.includes(m.id) ? "message-selected" : ""}`}
                   >
+                    {ai && !own && (
+                      <span className="ai-spark" aria-hidden="true">
+                        <Sparkles size={18} />
+                      </span>
+                    )}
                     <div
                       className={`bubble ${own ? "outgoing" : "incoming"} ${m.deleted ? "deleted" : ""}`}
                     >
@@ -746,6 +950,26 @@ export function Chat({
                         >
                           <Copy size={14} />
                         </button>
+                        {ai && !own && (
+                          <button
+                            aria-label={
+                              speakingId === m.id
+                                ? "Stop reading aloud"
+                                : "Read aloud"
+                            }
+                            title={
+                              speakingId === m.id ? "Stop reading" : "Read aloud"
+                            }
+                            aria-pressed={speakingId === m.id}
+                            onClick={() => void readAloud(m)}
+                          >
+                            {speakingId === m.id ? (
+                              <Square size={13} />
+                            ) : (
+                              <Volume2 size={14} />
+                            )}
+                          </button>
+                        )}
                         {!ai && (
                           <button
                             aria-label="Select message for summary"
@@ -794,6 +1018,11 @@ export function Chat({
             })}
           {stream !== null && (
             <article className="message-row">
+              {ai && (
+                <span className="ai-spark ai-spark-busy" aria-hidden="true">
+                  <Sparkles size={18} />
+                </span>
+              )}
               <div className="bubble incoming markdown streaming">
                 <Markdown body={stream || "Thinking…"} />
                 <span className="stream-caret" />
@@ -893,24 +1122,26 @@ export function Chat({
               e.target.value = "";
             }}
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Attach a file"
-            title={
-              ai
-                ? "AI attachments are unavailable; paste text instead."
-                : "Attach an image or document (up to 10 MB)"
-            }
-            disabled={ai || !!uploadState}
-            onClick={() => file.current?.click()}
-          >
-            <Paperclip size={21} />
-          </Button>
+          {!ai && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Attach a file"
+              title={
+                ai
+                  ? "AI attachments are unavailable; paste text instead."
+                  : "Attach an image or document (up to 10 MB)"
+              }
+              disabled={ai || !!uploadState}
+              onClick={() => file.current?.click()}
+            >
+              <Paperclip size={21} />
+            </Button>
+          )}
           <textarea
             aria-label="Message"
-            placeholder={ai ? "Ask Relay AI anything…" : "Write a message…"}
+            placeholder={ai ? "Ask Relay AI" : "Write a message…"}
             rows={1}
             value={body}
             maxLength={8000}
@@ -933,47 +1164,82 @@ export function Chat({
               }
             }}
           />
-          <div className="emoji-wrap">
+          {!ai && (
+            <div className="emoji-wrap">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Choose emoji"
+                onClick={() => setEmoji(!emoji)}
+              >
+                <Smile size={21} />
+              </Button>
+              {emoji && (
+                <div className="emoji-picker">
+                  {[
+                    "😊",
+                    "👍",
+                    "❤️",
+                    "😂",
+                    "🎉",
+                    "👀",
+                    "🙏",
+                    "✨",
+                    "🚀",
+                    "👋",
+                    "💡",
+                    "✅",
+                  ].map((e) => (
+                    <button
+                      type="button"
+                      aria-label={`Insert ${e}`}
+                      key={e}
+                      onClick={() => {
+                        setBody(body + e);
+                        setEmoji(false);
+                      }}
+                    >
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {recognition.supported && voice === "off" && (
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              aria-label="Choose emoji"
-              onClick={() => setEmoji(!emoji)}
+              className={recognition.listening ? "mic-active" : ""}
+              aria-label={
+                recognition.listening ? "Stop dictation" : "Dictate a message"
+              }
+              aria-pressed={recognition.listening}
+              title={recognition.listening ? "Stop dictation" : "Dictate"}
+              onClick={toggleDictation}
             >
-              <Smile size={21} />
+              <Mic size={20} />
             </Button>
-            {emoji && (
-              <div className="emoji-picker">
-                {[
-                  "😊",
-                  "👍",
-                  "❤️",
-                  "😂",
-                  "🎉",
-                  "👀",
-                  "🙏",
-                  "✨",
-                  "🚀",
-                  "👋",
-                  "💡",
-                  "✅",
-                ].map((e) => (
-                  <button
-                    type="button"
-                    aria-label={`Insert ${e}`}
-                    key={e}
-                    onClick={() => {
-                      setBody(body + e);
-                      setEmoji(false);
-                    }}
-                  >
-                    {e}
-                  </button>
-                ))}
-              </div>
+          )}
+          {ai &&
+            recognition.supported &&
+            voice === "off" &&
+            stream === null &&
+            !body.trim() && (
+              <button
+                type="button"
+                className="live-pill"
+                aria-label="Start voice conversation"
+                title="Talk with Relay AI"
+                disabled={!aiConfigured}
+                onClick={startVoice}
+              >
+                <AudioLines size={18} />
+                Live
+              </button>
             )}
-          </div>
           {stream !== null ? (
             <Button
               type="button"
@@ -983,7 +1249,7 @@ export function Chat({
             >
               <Square size={17} />
             </Button>
-          ) : (
+          ) : ai && recognition.supported && !body.trim() ? null : (
             <Button
               type="submit"
               size="icon"
@@ -1009,6 +1275,16 @@ export function Chat({
           </span>
         </div>
       </footer>
+      <VoiceLive
+        state={voice}
+        heard={heard}
+        caption={caption}
+        level={micLevel}
+        onHold={holdVoice}
+        onResume={resumeVoice}
+        onInterrupt={interruptSpeech}
+        onEnd={endVoice}
+      />
       <Dialog
         open={!!reactionTarget}
         onOpenChange={() => setReactionTarget(null)}

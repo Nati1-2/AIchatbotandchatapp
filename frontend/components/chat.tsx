@@ -166,9 +166,9 @@ export function Chat({
       setError(
         code === "not-allowed" || code === "service-not-allowed"
           ? "Microphone access is blocked. Allow it in your browser to use voice."
-          : code === "network"
-            ? "Voice input needs an internet connection."
-            : "Voice input stopped (" + code + ").",
+          : code === "microphone-failed"
+            ? "Could not start the microphone. Please try again."
+            : code,
       );
     },
   });

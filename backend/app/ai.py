@@ -8,7 +8,7 @@ from sqlalchemy import select, func, delete
 from .config import settings
 from .db import database, SessionLocal
 from .models import Conversation, Message, Generation, now
-from .schemas import AIInput, SpeechInput
+from .schemas import AIInput, SpeechInput, TranscriptionInput
 from .security import current_user, member
 from .events import limit, publish, r
 
@@ -91,6 +91,31 @@ class Provider:
             raise ValueError("The speech provider returned no audio.")
         return base64.b64decode(audio)
 
+    async def transcribe(self, audio: str, mime_type: str):
+        """Transcribe recorded browser audio with Gemini, without Web Speech."""
+        base = settings.ai_base_url.rstrip("/")
+        if base.endswith("/openai"):
+            base = base[: -len("/openai")]
+        async with httpx.AsyncClient(timeout=settings.ai_timeout_seconds) as client:
+            response = await client.post(
+                base + f"/models/{settings.ai_model}:generateContent",
+                headers={"x-goog-api-key": settings.ai_api_key},
+                json={
+                    "contents": [{
+                        "role": "user",
+                        "parts": [
+                            {"text": "Transcribe this speech exactly. Return only the spoken words. If there is no intelligible speech, return an empty response."},
+                            {"inline_data": {"mime_type": mime_type.split(";")[0], "data": audio}},
+                        ],
+                    }],
+                    "generationConfig": {"temperature": 0},
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        parts = payload.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        return "".join(part.get("text", "") for part in parts).strip()
+
 
 provider = Provider()
 
@@ -109,6 +134,21 @@ async def generate_speech(data: SpeechInput, user=Depends(current_user)):
     except Exception:
         raise HTTPException(502, "Relay could not generate speech.")
     return Response(content=audio, media_type="audio/wav")
+
+
+@router.post("/ai/transcribe")
+async def transcribe_speech(data: TranscriptionInput, user=Depends(current_user)):
+    if not settings.ai_api_key:
+        raise HTTPException(503, "Relay AI needs a server-side AI_API_KEY.")
+    await limit("ai:transcribe:" + user.id, 60, 60)
+    try:
+        # Reject oversized decoded recordings before sending them upstream.
+        if len(data.audio) > 8_000_000:
+            raise ValueError("Recording is too large")
+        text = await provider.transcribe(data.audio, data.mime_type)
+    except Exception:
+        raise HTTPException(502, "Relay could not understand that recording.")
+    return {"text": text}
 
 
 @router.post("/conversations/{cid}/ai/stream")

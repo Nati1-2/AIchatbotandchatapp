@@ -1,33 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { cancelAISpeech, speakAI } from "./api";
+import { cancelAISpeech, speakAI, transcribeAI } from "./api";
 
-// Minimal typing for the Web Speech API's recognizer (prefixed in Chromium/Safari).
-type Recognizer = {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult:
-    | ((e: {
-        resultIndex: number;
-        results: ArrayLike<{ isFinal: boolean } & ArrayLike<{ transcript: string }>>;
-      }) => void)
-    | null;
-  onerror: ((e: { error: string }) => void) | null;
-  onend: (() => void) | null;
-};
-type RecognizerCtor = new () => Recognizer;
-
-function recognizerCtor(): RecognizerCtor | null {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as Record<string, RecognizerCtor | undefined>;
-  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
-}
-
-/** Speech to text. `onResult` gets the running transcript; `onEnd` gets the final one ("" if nothing was heard). */
+/** Records locally, detects a pause, then asks the configured Gemini backend to transcribe. */
 export function useSpeechRecognition(handlers: {
   onResult: (text: string) => void;
   onEnd?: (finalText: string) => void;
@@ -35,47 +10,94 @@ export function useSpeechRecognition(handlers: {
 }) {
   const h = useRef(handlers);
   h.current = handlers;
-  const rec = useRef<Recognizer | null>(null);
+  const recorder = useRef<MediaRecorder | null>(null);
+  const stream = useRef<MediaStream | null>(null);
+  const context = useRef<AudioContext | null>(null);
+  const frame = useRef(0);
+  const cancelled = useRef(false);
   const [supported, setSupported] = useState(false);
   const [listening, setListening] = useState(false);
   useEffect(() => {
-    setSupported(!!recognizerCtor());
-    return () => rec.current?.abort();
+    setSupported(!!navigator.mediaDevices?.getUserMedia && "MediaRecorder" in window);
+    return () => abort();
   }, []);
-  function start() {
-    const Ctor = recognizerCtor();
-    if (!Ctor) return;
-    rec.current?.abort();
-    const r = new Ctor();
-    r.lang = navigator.language || "en-US";
-    r.interimResults = true;
-    r.continuous = false; // ends on a pause, which is when a voice turn is sent
-    let finalText = "";
-    r.onresult = (e) => {
-      let interim = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const result = e.results[i];
-        if (result.isFinal) finalText += result[0].transcript;
-        else interim += result[0].transcript;
-      }
-      h.current.onResult((finalText + interim).trim());
-    };
-    r.onerror = (e) => h.current.onError?.(e.error);
-    r.onend = () => {
-      if (rec.current === r) rec.current = null;
+  async function start() {
+    abort();
+    cancelled.current = false;
+    try {
+      const media = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+      if (cancelled.current) return media.getTracks().forEach((track) => track.stop());
+      stream.current = media;
+      const chunks: Blob[] = [];
+      const r = new MediaRecorder(media);
+      recorder.current = r;
+      r.ondataavailable = (event) => event.data.size && chunks.push(event.data);
+      r.onstop = async () => {
+        cancelAnimationFrame(frame.current);
+        media.getTracks().forEach((track) => track.stop());
+        stream.current = null;
+        void context.current?.close();
+        context.current = null;
+        recorder.current = null;
+        setListening(false);
+        if (cancelled.current) return;
+        try {
+          h.current.onResult("Transcribing…");
+          const text = await transcribeAI(new Blob(chunks, { type: r.mimeType }));
+          h.current.onResult(text);
+          h.current.onEnd?.(text);
+        } catch (error) {
+          h.current.onError?.((error as Error).message || "transcription-failed");
+        }
+      };
+      r.start(250);
+      setListening(true);
+
+      const audio = new AudioContext();
+      context.current = audio;
+      const analyser = audio.createAnalyser();
+      analyser.fftSize = 256;
+      audio.createMediaStreamSource(media).connect(analyser);
+      const samples = new Uint8Array(analyser.fftSize);
+      const started = performance.now();
+      let speechAt = 0;
+      const watch = () => {
+        analyser.getByteTimeDomainData(samples);
+        let sum = 0;
+        for (const value of samples) sum += ((value - 128) / 128) ** 2;
+        const loud = Math.sqrt(sum / samples.length) > 0.025;
+        const now = performance.now();
+        if (loud) speechAt = now;
+        if ((speechAt && now - speechAt > 1200) || now - started > 15000) r.stop();
+        else frame.current = requestAnimationFrame(watch);
+      };
+      watch();
+    } catch (error) {
       setListening(false);
-      h.current.onEnd?.(finalText.trim());
-    };
-    rec.current = r;
-    setListening(true);
-    r.start();
+      h.current.onError?.(
+        (error as DOMException).name === "NotAllowedError" ? "not-allowed" : "microphone-failed",
+      );
+    }
+  }
+  function abort() {
+    cancelled.current = true;
+    cancelAnimationFrame(frame.current);
+    if (recorder.current?.state !== "inactive") recorder.current?.stop();
+    stream.current?.getTracks().forEach((track) => track.stop());
+    stream.current = null;
+    void context.current?.close();
+    context.current = null;
+    recorder.current = null;
+    setListening(false);
   }
   return {
     supported,
     listening,
     start,
-    stop: () => rec.current?.stop(),
-    abort: () => rec.current?.abort(),
+    stop: () => recorder.current?.state !== "inactive" && recorder.current?.stop(),
+    abort,
   };
 }
 

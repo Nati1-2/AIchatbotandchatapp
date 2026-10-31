@@ -65,6 +65,19 @@ export async function speakAI(text: string) {
     speechRequest = null;
   });
 }
+export async function transcribeAI(blob: Blob) {
+  const audio = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the recording."));
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.readAsDataURL(blob);
+  });
+  const result = await mutate<{ text: string }>("/ai/transcribe", {
+    audio,
+    mime_type: blob.type || "audio/webm",
+  });
+  return result.text.trim();
+}
 export function upload(
   cid: string,
   file: File,

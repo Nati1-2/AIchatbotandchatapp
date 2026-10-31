@@ -60,3 +60,8 @@ class AIInput(BaseModel):
 
 class SpeechInput(BaseModel):
     text: str = Field(min_length=1, max_length=1200)
+
+
+class TranscriptionInput(BaseModel):
+    audio: str = Field(min_length=1, max_length=8_000_000)
+    mime_type: str = Field(pattern=r"^audio/[a-zA-Z0-9.+-]+(?:;.*)?$")

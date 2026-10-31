@@ -1,16 +1,16 @@
-import asyncio, json, time
+import asyncio, base64, json, time
 from datetime import timedelta
 from uuid import uuid4
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select, func, delete
 from .config import settings
 from .db import database, SessionLocal
 from .models import Conversation, Message, Generation, now
-from .schemas import AIInput
+from .schemas import AIInput, SpeechInput
 from .security import current_user, member
-from .events import r, publish
+from .events import limit, publish, r
 
 router = APIRouter()
 
@@ -45,12 +45,70 @@ class Provider:
                         if choice.get("delta", {}).get("content"):
                             yield {"delta": choice["delta"]["content"]}
 
+    async def speech(self, text: str):
+        """Generate WAV speech with Gemini's native TTS endpoint."""
+        base = settings.ai_base_url.rstrip("/")
+        if base.endswith("/openai"):
+            base = base[: -len("/openai")]
+        async with httpx.AsyncClient(timeout=settings.ai_timeout_seconds) as client:
+            response = await client.post(
+                base + "/interactions",
+                headers={
+                    "x-goog-api-key": settings.ai_api_key,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.ai_tts_model,
+                    "input": [
+                        {
+                            "type": "user_input",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text,
+                                    "annotations": [
+                                        {
+                                            "type": "speech_metadata",
+                                            "style": "warm, natural, and conversational",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                    "response_format": {"type": "audio", "mime_type": "audio/wav"},
+                    "generation_config": {"speech_config": [{"voice": "Kore"}]},
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        audio = None
+        for step in payload.get("steps", []):
+            for item in step.get("content", []):
+                if item.get("type") == "audio" and item.get("data"):
+                    audio = item["data"]
+        if not audio:
+            raise ValueError("The speech provider returned no audio.")
+        return base64.b64decode(audio)
+
 
 provider = Provider()
 
 
 def sse(event, data):
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.post("/ai/speech")
+async def generate_speech(data: SpeechInput, user=Depends(current_user)):
+    if not settings.ai_api_key:
+        raise HTTPException(503, "Relay AI needs a server-side AI_API_KEY.")
+    await limit("ai:speech:" + user.id, 60, 60)
+    try:
+        audio = await provider.speech(data.text)
+    except Exception:
+        raise HTTPException(502, "Relay could not generate speech.")
+    return Response(content=audio, media_type="audio/wav")
 
 
 @router.post("/conversations/{cid}/ai/stream")

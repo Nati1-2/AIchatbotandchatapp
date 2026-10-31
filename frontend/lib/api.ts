@@ -34,6 +34,37 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 export function mutate<T>(path: string, body: unknown, method = "POST") {
   return api<T>(path, { method, body: JSON.stringify(body) });
 }
+let speechAudio: HTMLAudioElement | null = null;
+let speechRequest: AbortController | null = null;
+export function cancelAISpeech() {
+  speechRequest?.abort();
+  speechRequest = null;
+  speechAudio?.pause();
+  speechAudio = null;
+}
+export async function speakAI(text: string) {
+  speechRequest = new AbortController();
+  const response = await fetch(API + "/ai/speech", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+    body: JSON.stringify({ text }),
+    signal: speechRequest.signal,
+  });
+  if (!response.ok) throw new Error("Relay could not generate speech.");
+  const url = URL.createObjectURL(await response.blob());
+  const audio = new Audio(url);
+  speechAudio = audio;
+  await new Promise<void>((resolve, reject) => {
+    audio.onended = () => resolve();
+    audio.onerror = () => reject(new Error("Speech playback failed."));
+    void audio.play().catch(reject);
+  }).finally(() => {
+    URL.revokeObjectURL(url);
+    if (speechAudio === audio) speechAudio = null;
+    speechRequest = null;
+  });
+}
 export function upload(
   cid: string,
   file: File,

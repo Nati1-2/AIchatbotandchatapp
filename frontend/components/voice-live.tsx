@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Pause, Play, X, Sparkles } from "lucide-react";
+import { Mic, Pause, Play, Sparkles, Volume2, X } from "lucide-react";
 import { speakable } from "@/lib/voice";
 
 export type VoiceState = "off" | "listening" | "thinking" | "speaking" | "held";
@@ -49,6 +49,14 @@ export function VoiceLive({
         : state === "speaking"
           ? "Speaking"
           : "On hold";
+  const statusDetail =
+    state === "listening"
+      ? "Speak naturally — I’ll answer when you pause"
+      : state === "thinking"
+        ? "Putting together a response"
+        : state === "speaking"
+          ? "Tap the wave to jump in"
+          : "Your conversation is paused";
   return createPortal(
     <div
       className={`live live-${state}`}
@@ -60,7 +68,7 @@ export function VoiceLive({
       <header className="live-top">
         <span className="live-badge">
           <Sparkles size={15} />
-          Live
+          Relay Live
         </span>
       </header>
       <div
@@ -88,22 +96,39 @@ export function VoiceLive({
           <p className="live-hint">On hold. Resume when you’re ready.</p>
         )}
       </div>
-      <button
-        type="button"
-        className="live-glow"
-        aria-label={
-          state === "speaking" ? "Interrupt and talk" : `Relay AI: ${status}`
-        }
-        onClick={state === "speaking" ? onInterrupt : undefined}
-        tabIndex={state === "speaking" ? 0 : -1}
-      >
-        <span className="live-blob b1" />
-        <span className="live-blob b2" />
-        <span className="live-blob b3" />
-      </button>
-      <p className="live-status" role="status">
-        {state === "speaking" ? "Tap to interrupt" : status}
-      </p>
+      <div className="live-visual-wrap">
+        <button
+          type="button"
+          className="live-orb"
+          aria-label={
+            state === "speaking" ? "Interrupt and talk" : `Relay AI: ${status}`
+          }
+          onClick={state === "speaking" ? onInterrupt : undefined}
+          tabIndex={state === "speaking" ? 0 : -1}
+        >
+          <span className="live-orb-aura" />
+          <span className="live-orb-core">
+            {state === "listening" ? <Mic size={28} /> : <Volume2 size={28} />}
+          </span>
+          <span className="live-wave" aria-hidden="true">
+            {Array.from({ length: 19 }, (_, index) => (
+              <i
+                key={index}
+                style={
+                  {
+                    "--bar": index,
+                    "--peak": 1.25 + (index % 5) * 0.28,
+                  } as React.CSSProperties
+                }
+              />
+            ))}
+          </span>
+        </button>
+        <div className="live-state" role="status">
+          <strong>{status}</strong>
+          <span>{statusDetail}</span>
+        </div>
+      </div>
       <footer className="live-controls">
         <span className="live-control">
           <button

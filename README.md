@@ -1,120 +1,165 @@
 # Relay
 
-A Telegram-inspired messaging application with original Relay branding, a restrained dark interface, a Next.js frontend, and a Python/FastAPI backend. Messages are persisted in PostgreSQL. This is **not end-to-end encrypted**: the server can read message content.
+**Private messaging and natural AI voice conversations in one focused workspace.**
 
-## Start locally
+Relay combines a real-time messenger with Relay Live, a hands-free Gemini voice
+experience. Start Live and Relay greets you aloud, listens until you pause,
+streams an answer, speaks it with Gemini TTS, and returns to listening for the
+next turn.
 
-Requirements: Docker Engine running and Docker Compose v2. From this repository root:
+![Relay Live speaking with an animated waveform](docs/screenshots/ai-voice-live.png)
 
-```sh
-docker compose -f infra/compose.yaml up --build
+[Watch the 10-second product demo](docs/demo/relay-demo.webm)
+
+## AI voice chat comes first
+
+Relay Live is built as a continuous conversation rather than a voice button
+attached to a text box.
+
+- **AI speaks first.** Relay opens with a friendly spoken greeting.
+- **Hands-free turns.** Speech recognition sends a turn after the user pauses.
+- **Streaming responses.** Text arrives from Gemini as it is generated.
+- **Natural audio.** The server converts replies to Gemini-generated WAV audio,
+  so voice works even when browser speech synthesis is unavailable.
+- **Responsive waveform.** Microphone volume drives the listening visualization;
+  animated waves show thinking and speaking states.
+- **Interruptible.** Tap the waveform while Relay is speaking to jump in.
+- **Hold and resume.** Pause the conversation without leaving Live mode.
+- **Private context.** The AI receives only the current Relay AI conversation.
+  API keys remain on the server.
+
+The text model uses Gemini's OpenAI-compatible chat-completions endpoint. Spoken
+audio uses Gemini's native TTS interactions endpoint with the Kore voice.
+
+## Real conversations between people
+
+Relay is also a complete direct and group messaging experience. PostgreSQL is
+the source of truth, while Redis and WebSockets deliver live updates.
+
+- Direct messages and owner-managed group chats
+- Optimistic sending with retry and idempotent persistence
+- Replies, edits, tombstone deletion and six reactions
+- Typing, online presence, unread counts and delivery/read receipts
+- Private image, PDF and text attachments up to 10 MB
+- Conversation search, pinning, muting and shared-file details
+- Responsive desktop and mobile layouts with keyboard accessibility
+
+![A real-time conversation between Alex and Jordan](docs/screenshots/messaging.png)
+
+## Run everything from one terminal
+
+Requirements: Docker Desktop or Docker Engine, Docker Compose v2, Node.js 24,
+Python 3.12+, and [uv](https://docs.astral.sh/uv/).
+
+```bash
+cp .env.example .env
 ```
 
-Open **http://localhost:3000**. The first build downloads dependencies; the migration and development seed run automatically. API documentation: **http://localhost:8000/docs**. Storage (RustFS, S3-compatible) console: **http://localhost:9001** (development credentials `relay-local` / `relay-local-secret`). The attachment bucket is private.
+Add a Gemini API key to the single root environment file:
+
+```env
+AI_API_KEY=your-gemini-api-key
+```
+
+Then start the entire stack:
+
+```bash
+npm run dev
+```
+
+This command starts Docker Desktop when necessary, waits for PostgreSQL, Redis
+and private object storage, runs migrations, and launches the API, worker and
+frontend in the same terminal.
+
+- App: <http://localhost:3000>
+- API docs: <http://localhost:8000/docs>
+- Storage console: <http://localhost:9001>
 
 Development accounts:
 
-| Username | Password |
+| User | Password |
 | --- | --- |
 | `alex` | `Relay-demo-2026!` |
 | `jordan` | `Relay-demo-2026!` |
 
-The seed is idempotent and refuses to run unless `ENVIRONMENT=development`. It creates a direct conversation, “The studio” group, and a private AI conversation for each account. Never run this Compose file unchanged in production.
+For a temporary no-Docker demo with mocked AI, use `npm run dev:lite`.
 
-To enable real AI, copy `.env.example` to `.env`, set a server-side API key, then run:
+## How a Live turn works
 
-```sh
-docker compose --env-file .env -f infra/compose.yaml up --build
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant B as Browser
+    participant A as Relay API
+    participant G as Gemini
+
+    B->>U: Speak opening greeting
+    U->>B: Talk naturally
+    B->>A: Transcript after pause
+    A->>G: Stream conversation context
+    G-->>A: Response tokens
+    A-->>B: Server-sent events
+    B->>A: Request speech audio
+    A->>G: Gemini TTS
+    G-->>A: WAV audio
+    A-->>B: Play reply + animate waveform
+    B->>U: Resume listening
 ```
 
-The adapter uses an OpenAI-compatible `/chat/completions` streaming API. Set `AI_BASE_URL`, `AI_MODEL`, and `AI_API_KEY` for your provider. No key is sent to the browser. Without a key, the UI explains that AI is unavailable; it does not fabricate responses.
+## Architecture
 
-Stop services without removing messages:
+| Layer | Technology | Responsibility |
+| --- | --- | --- |
+| Web | Next.js 16, React 19, strict TypeScript | Messaging UI, Live mode, speech input and audio playback |
+| API | FastAPI, Pydantic, SQLAlchemy | Auth, messaging contracts, AI streaming and speech generation |
+| Data | PostgreSQL, Alembic | Users, conversations, messages, receipts and AI usage |
+| Realtime | Redis, native WebSockets | Events, presence, typing, rate limits and AI locks |
+| Files | RustFS/S3-compatible storage | Private uploads and authorized downloads |
+| AI | Gemini chat completions + Gemini TTS | Streamed responses and natural spoken replies |
 
-```sh
-docker compose -f infra/compose.yaml down
-```
+The backend stores server-side sessions in HttpOnly cookies, validates CSRF and
+request origins, hashes passwords with Argon2, rate-limits authentication and AI
+requests, and never exposes the provider key to the frontend.
 
-## Two-browser walkthrough
+Relay is **not end-to-end encrypted**. The server can read message content. The
+current release also does not include person-to-person calls, push notifications,
+password recovery or MFA.
 
-1. Sign in as `alex` in a normal window and `jordan` in an incognito window (separate cookie jars).
-2. Open their direct conversation and exchange messages. A single check means server-persisted; double checks mean all other members have delivered or read the message (hover for the exact state).
-3. Use message actions to reply, edit your message, react, copy, or select text for an AI summary. Hover or keyboard-focus a message to reveal actions; mobile users can tap it.
-4. Disconnect one browser, send from the other, reconnect, and reopen the conversation. History comes from PostgreSQL; missed Redis events do not lose messages.
-5. Use New conversation → New group, search for `jordan`, and name the group. Open details to add/remove members or change roles as owner.
-6. Attach a PNG, JPEG, WebP, PDF, or UTF-8 text file (up to 10 MB). Wait for worker validation, then send. Shared files appear in details.
-7. Open Relay AI. With a provider key, send a prompt, stop generation, or retry a failed request. For summaries, select message actions → review the exact text → confirm.
+## Development and verification
 
-## Develop without containers
-
-Use Node.js 24 and Python 3.12+. Install [uv](https://docs.astral.sh/uv/getting-started/installation/). Run PostgreSQL, Redis and an S3-compatible service first; create a private `relay-private` bucket. The Compose infrastructure services can be started independently:
-
-```sh
-docker compose -f infra/compose.yaml up -d postgres redis storage
-(cd backend && uv run python -m app.storage_init)  # creates the private bucket
-```
-
-Or start the backend API, worker and frontend together in one terminal (creates `.env` files, installs dependencies and runs migrations if needed; Ctrl+C stops everything):
-
-```sh
-npm run dev         # backend API + worker + frontend
-npm run dev:infra   # same, and first starts postgres/redis/storage with Docker
-npm run dev:lite    # no Docker: temporary SQLite, in-memory Redis/storage, mocked AI; data is lost on exit
-```
-
-To run them separately instead, start the backend in one terminal:
-
-```sh
-cd backend
-cp .env.example .env
-# Set S3_ACCESS_KEY=relay-local and S3_SECRET_KEY=relay-local-secret for local Compose storage.
-uv sync --frozen --all-groups
-uv run alembic upgrade head
-uv run python -m app.seed
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-access-log
-```
-
-Worker, in another terminal:
-
-```sh
-cd backend
-uv run python -m app.worker
-```
-
-Frontend, in a third terminal:
-
-```sh
-cd frontend
-cp .env.example .env.local
-npm ci
-npm run dev
-```
-
-Use `localhost` consistently: mixing `127.0.0.1` and `localhost` in browser URLs changes cookie and origin behavior.
-
-## Checks
-
-```sh
+```bash
 cd backend
 uv run pytest -q
-# Optional, DESTRUCTIVE to the named disposable test database only:
-TEST_DATABASE_URL=postgresql+asyncpg://relay:relay@localhost:5432/relay_test uv run pytest -q
+
 cd ../frontend
 npm run typecheck
 npm test
 npm run build
-npx playwright install chromium
 npm run test:e2e
 ```
 
-Browser tests launch their own test-only backend on port 8000 and frontend on 3000. Stop ordinary servers first. They use SQLite, an in-memory event bus/private object store, and an explicitly mocked provider; they never call paid AI services. Their backend is under `backend/tests/` and is excluded from the production Docker image. API tests run with SQLite by default; CI also runs them against PostgreSQL. See [verification](docs/VERIFICATION.md) for the checks actually run in this workspace.
+Recreate the README media while the local stack is running:
 
-## Project map
+```bash
+cd frontend
+npx playwright install chromium ffmpeg
+node scripts/capture-demo.mjs
+```
 
-- `frontend/`: App Router, strict TypeScript, Tailwind, shadcn-style Radix primitives, TanStack Query, React Hook Form/Zod, Zustand selection state, native WebSocket client.
-- `backend/app/`: authentication, messaging, events, attachments, worker, AI adapter, schemas and normalized SQLAlchemy models.
-- `backend/migrations/`: Alembic schema migration.
-- `infra/`: local Docker Compose stack.
-- `docs/`: [architecture](docs/ARCHITECTURE.md), [API/events](docs/API.md), [deployment](docs/DEPLOYMENT.md), [feature status](docs/STATUS.md), and [verification](docs/VERIFICATION.md).
+The capture script uses isolated Alex and Jordan sessions, records Relay Live,
+and verifies real-time message delivery before producing the screenshots and
+WebM demo.
 
-Dependency resolution is recorded in `frontend/package-lock.json` and `backend/uv.lock`. Use `npm ci` and `uv sync --frozen` for reproducible installs.
+## Repository guide
+
+- [`frontend/`](frontend/) — application UI, voice engine and browser tests
+- [`backend/app/`](backend/app/) — API, AI adapter, worker and data models
+- [`infra/`](infra/) — local Compose infrastructure
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system design and tradeoffs
+- [`docs/API.md`](docs/API.md) — HTTP and WebSocket contracts
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — production deployment guidance
+- [`docs/STATUS.md`](docs/STATUS.md) — implemented features and known limits
+- [`docs/VERIFICATION.md`](docs/VERIFICATION.md) — validation record
+
+Dependency resolution is committed in `frontend/package-lock.json` and
+`backend/uv.lock` for reproducible installs.

@@ -371,7 +371,7 @@ export function Chat({
     setVoice("listening");
     recognition.start();
   }
-  function startVoice() {
+  async function startVoice() {
     if (!aiConfigured) {
       setError("Set AI_API_KEY on the server to enable Relay AI.");
       return;
@@ -383,8 +383,15 @@ export function Chat({
     setError("");
     voiceOn.current = true;
     held.current = false;
-    setCaption("");
-    listen();
+    const greeting = "Hi, I’m Relay. What would you like to talk about?";
+    setCaption(greeting);
+    setVoice("speaking");
+    const out = createSpeaker();
+    speaker.current = out;
+    out.push(greeting);
+    await out.finish();
+    if (speaker.current === out) speaker.current = null;
+    if (voiceOn.current && !held.current) listen();
   }
   // Silences the reply and stops generating it, so the next turn isn't blocked.
   function silence() {
@@ -416,7 +423,8 @@ export function Chat({
     listen();
   }
   function interruptSpeech() {
-    silence(); // voiceTurn then resumes listening
+    silence();
+    if (voiceOn.current && !held.current && stream === null) listen();
   }
   function toggleDictation() {
     if (recognition.listening) return recognition.stop();

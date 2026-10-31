@@ -12,19 +12,38 @@ MODE="${1:-}"
 
 command -v uv >/dev/null || { echo "uv is not installed: https://docs.astral.sh/uv/" >&2; exit 1; }
 command -v npm >/dev/null || { echo "npm is not installed" >&2; exit 1; }
-if [[ ! -f "$ROOT/backend/.env" ]]; then
-  # Local Compose storage credentials (see README).
-  sed -e 's/^S3_ACCESS_KEY=.*/S3_ACCESS_KEY=relay-local/' \
-      -e 's/^S3_SECRET_KEY=.*/S3_SECRET_KEY=relay-local-secret/' \
-      "$ROOT/backend/.env.example" > "$ROOT/backend/.env"
+if [[ ! -f "$ROOT/.env" ]]; then
+  cp "$ROOT/.env.example" "$ROOT/.env"
+  echo "Created $ROOT/.env. Add AI_API_KEY there to enable real AI."
 fi
-[[ -f "$ROOT/frontend/.env.local" ]] || cp "$ROOT/frontend/.env.example" "$ROOT/frontend/.env.local"
+# One root environment file configures the frontend, backend and Compose.
+set -a
+# shellcheck disable=SC1091
+source "$ROOT/.env"
+set +a
 [[ -d "$ROOT/frontend/node_modules" ]] || (cd "$ROOT/frontend" && npm ci)
 
 if [[ "$MODE" == "--infra" ]]; then
-  # Publish Postgres on the port backend/.env points at (e.g. 5433 when a system Postgres owns 5432).
-  pg_port=$(grep -oP '^DATABASE_URL=.*@[^:/]+:\K[0-9]+' "$ROOT/backend/.env" || echo 5432)
-  POSTGRES_PORT=$pg_port docker compose -f "$ROOT/infra/compose.yaml" up -d --wait postgres redis storage
+  if ! docker info >/dev/null 2>&1; then
+    docker_desktop=/opt/docker-desktop/bin/docker-desktop
+    if [[ ! -x "$docker_desktop" ]]; then
+      echo "Docker is not running. Start Docker, then run npm run dev again." >&2
+      exit 1
+    fi
+    echo "Starting Docker Desktop…"
+    setsid "$docker_desktop" >/tmp/relay-docker-desktop.log 2>&1 < /dev/null &
+    for _ in {1..30}; do
+      docker info >/dev/null 2>&1 && break
+      sleep 2
+    done
+    if ! docker info >/dev/null 2>&1; then
+      echo "Docker Desktop did not become ready. See /tmp/relay-docker-desktop.log" >&2
+      exit 1
+    fi
+  fi
+  # Publish Postgres on the port .env points at (e.g. 5433 when a system Postgres owns 5432).
+  pg_port=$(grep -oP '^DATABASE_URL=.*@[^:/]+:\K[0-9]+' "$ROOT/.env" || echo 5432)
+  POSTGRES_PORT=$pg_port docker compose --env-file "$ROOT/.env" -f "$ROOT/infra/compose.yaml" up -d --wait postgres redis storage
 fi
 
 (cd "$ROOT/backend" && uv sync --frozen --all-groups)

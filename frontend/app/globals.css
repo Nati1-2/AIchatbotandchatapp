@@ -2159,7 +2159,10 @@ hr {
   flex-direction: column;
   align-items: center;
   overflow: hidden;
-  background: #0b0b0f;
+  background:
+    radial-gradient(circle at 50% 80%, #142951 0, transparent 32%),
+    radial-gradient(circle at 15% 15%, #30205255 0, transparent 30%),
+    linear-gradient(145deg, #080b13, #0d101b 55%, #090a10);
   color: #f1f3f4;
   animation: live-in 0.25s ease-out;
 }
@@ -2167,7 +2170,7 @@ hr {
   width: 100%;
   display: flex;
   justify-content: center;
-  padding: 20px 16px 0;
+  padding: max(20px, env(safe-area-inset-top)) 16px 0;
 }
 .live-badge {
   display: inline-flex;
@@ -2175,7 +2178,10 @@ hr {
   gap: 6px;
   padding: 6px 14px;
   border-radius: 999px;
-  background: #ffffff14;
+  border: 1px solid #ffffff14;
+  background: #ffffff0d;
+  box-shadow: inset 0 1px 0 #ffffff0d;
+  backdrop-filter: blur(16px);
   font-size: 14px;
   font-weight: 600;
 }
@@ -2191,7 +2197,7 @@ hr {
   flex-direction: column;
   justify-content: center;
   gap: 16px;
-  padding: 24px 24px 0;
+  padding: 32px 24px 12px;
   text-align: center;
 }
 .live-captions p {
@@ -2227,75 +2233,105 @@ hr {
 .live-dots i:nth-child(3) {
   animation-delay: 0.3s;
 }
-.live-glow {
-  position: absolute;
-  left: 50%;
-  bottom: -18vh;
-  width: max(140vw, 900px);
-  height: calc(46vh + var(--level) * 22vh);
-  transform: translateX(-50%);
-  padding: 0;
-  border: 0;
-  background: none;
-  filter: blur(60px);
-  transition:
-    height 0.12s linear,
-    opacity 0.4s;
-  cursor: default;
-}
-.live-speaking .live-glow {
-  cursor: pointer;
-}
-.live-glow:focus-visible {
-  outline: none;
-}
-.live-blob {
-  position: absolute;
-  bottom: 0;
-  height: 100%;
-  border-radius: 50%;
-  opacity: 0.75;
-}
-.live-blob.b1 {
-  left: 18%;
-  width: 34%;
-  background: radial-gradient(closest-side, var(--gem-blue), transparent);
-  animation: live-drift 7s ease-in-out infinite alternate;
-}
-.live-blob.b2 {
-  left: 36%;
-  width: 30%;
-  background: radial-gradient(closest-side, #5ec8f4, transparent);
-  animation: live-drift 5s ease-in-out -2s infinite alternate-reverse;
-}
-.live-blob.b3 {
-  left: 50%;
-  width: 34%;
-  background: radial-gradient(closest-side, var(--gem-purple), transparent);
-  animation: live-drift 6s ease-in-out -1s infinite alternate;
-}
-.live-thinking .live-glow {
-  opacity: 0.55;
-}
-.live-thinking .live-blob {
-  animation-duration: 1.6s;
-}
-.live-speaking .live-glow {
-  animation: live-talk 0.9s ease-in-out infinite alternate;
-}
-.live-held .live-glow {
-  opacity: 0.18;
-}
-.live-held .live-blob {
-  animation-play-state: paused;
-}
-.live-status {
+.live-visual-wrap {
   position: relative;
   z-index: 1;
-  margin: 24px 0 20px;
-  color: #e8eaed;
+  display: grid;
+  place-items: center;
+  gap: 20px;
+  width: min(620px, calc(100% - 32px));
+  margin-bottom: 24px;
+}
+.live-orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(520px, 88vw);
+  height: 148px;
+  padding: 0;
+  border: 1px solid #ffffff12;
+  border-radius: 999px;
+  background: #ffffff09;
+  color: #fff;
+  box-shadow: inset 0 1px 0 #ffffff12, 0 24px 80px #0008;
+  overflow: hidden;
+  cursor: default;
+  isolation: isolate;
+}
+.live-speaking .live-orb {
+  cursor: pointer;
+}
+.live-orb:focus-visible {
+  outline: 2px solid #8ab4f8;
+  outline-offset: 4px;
+}
+.live-orb-aura {
+  position: absolute;
+  inset: -70%;
+  z-index: -1;
+  background: conic-gradient(from 90deg, #3d7eff, #55d8ff, #9a62ff, #3d7eff);
+  filter: blur(42px);
+  opacity: calc(0.25 + var(--level) * 0.6);
+  animation: live-spin 7s linear infinite;
+  transition: opacity 120ms linear;
+}
+.live-orb-core {
+  position: absolute;
+  left: 28px;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #7bdcff, #7667ff);
+  box-shadow: 0 0 32px #568cff99;
+}
+.live-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: calc(100% - 120px);
+  margin-left: 72px;
+  height: 84px;
+}
+.live-wave i {
+  width: 5px;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #a9eaff, #8a7dff);
+  box-shadow: 0 0 14px #6ea8ff55;
+  transform: scaleY(calc(0.65 + var(--level) * 3.8));
+  transition: transform 90ms linear;
+}
+.live-speaking .live-wave i {
+  animation: live-wave 0.9s ease-in-out infinite alternate;
+  animation-delay: calc(var(--bar) * -55ms);
+}
+.live-thinking .live-wave i {
+  animation: live-think 1.4s ease-in-out infinite;
+  animation-delay: calc(var(--bar) * -45ms);
+}
+.live-held .live-orb {
+  opacity: 0.5;
+}
+.live-held .live-orb-aura,
+.live-held .live-wave i {
+  animation-play-state: paused;
+}
+.live-state {
+  display: grid;
+  gap: 5px;
+  text-align: center;
+}
+.live-state strong {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+.live-state span {
+  color: #9ea7b8;
   font-size: 13px;
-  letter-spacing: 0.02em;
 }
 .live-controls {
   position: relative;
@@ -2337,21 +2373,16 @@ hr {
     opacity: 0;
   }
 }
-@keyframes live-drift {
-  from {
-    transform: translateX(-8%) scaleY(0.92);
-  }
-  to {
-    transform: translateX(8%) scaleY(1.08);
-  }
+@keyframes live-spin {
+  to { transform: rotate(360deg); }
 }
-@keyframes live-talk {
-  from {
-    transform: translateX(-50%) scaleY(0.9);
-  }
-  to {
-    transform: translateX(-50%) scaleY(1.15);
-  }
+@keyframes live-wave {
+  0% { transform: scaleY(0.55); opacity: 0.55; }
+  100% { transform: scaleY(var(--peak)); opacity: 1; }
+}
+@keyframes live-think {
+  0%, 100% { transform: scaleY(0.55); opacity: 0.35; }
+  50% { transform: scaleY(1.65); opacity: 0.9; }
 }
 @keyframes live-dot {
   0%,
@@ -2398,11 +2429,27 @@ hr {
   .live-controls {
     gap: 32px;
   }
+  .live-orb {
+    height: 126px;
+  }
+  .live-orb-core {
+    left: 18px;
+    width: 46px;
+    height: 46px;
+  }
+  .live-wave {
+    gap: 4px;
+    width: calc(100% - 92px);
+    margin-left: 58px;
+  }
+  .live-wave i {
+    width: 4px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .live,
-  .live-blob,
-  .live-glow,
+  .live-orb-aura,
+  .live-wave i,
   .live-dots i,
   .ai-spark-busy svg {
     animation: none !important;

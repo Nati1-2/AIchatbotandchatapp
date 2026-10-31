@@ -1,8 +1,12 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=ROOT_ENV, extra="ignore")
     environment: str = "development"
     database_url: str = "postgresql+asyncpg://relay:relay@localhost:5432/relay"
     redis_url: str = "redis://localhost:6379/0"
@@ -15,8 +19,9 @@ class Settings(BaseSettings):
     s3_bucket: str = "relay-private"
     max_upload_bytes: int = 10 * 1024 * 1024
     ai_api_key: str = ""
-    ai_base_url: str = "https://api.openai.com/v1"
-    ai_model: str = "gpt-4.1-mini"
+    ai_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    ai_model: str = "gemini-2.5-flash"
+    ai_tts_model: str = "gemini-3.8-flash-tts"
     ai_daily_limit: int = 50
     ai_timeout_seconds: int = 60
     ai_context_chars: int = 24000

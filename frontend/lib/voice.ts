@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { cancelAISpeech, speakAI } from "./api";
 
 // Minimal typing for the Web Speech API's recognizer (prefixed in Chromium/Safari).
 type Recognizer = {
@@ -96,6 +97,7 @@ export function speechSupported() {
 
 export function cancelSpeech() {
   if (speechSupported()) window.speechSynthesis.cancel();
+  cancelAISpeech();
 }
 
 // Prefer natural/neural voices (e.g. "Google US English", "Microsoft Aria Online (Natural)").
@@ -127,27 +129,41 @@ export function createSpeaker(onLevel?: (speaking: boolean) => void) {
   let closed = false;
   let cancelled = false;
   let done: () => void = () => {};
+  let remote = Promise.resolve();
   const finished = new Promise<void>((resolve) => (done = resolve));
   const lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
   function settle() {
     if (cancelled || (closed && pending === 0)) done();
   }
   function say(markdown: string) {
-    if (cancelled || !speechSupported()) return;
-    const voice = bestVoice(lang);
-    for (const chunk of sentences(speakable(markdown))) {
-      const u = new SpeechSynthesisUtterance(chunk);
-      u.lang = voice?.lang || lang;
-      if (voice) u.voice = voice;
-      u.rate = 1.05;
+    if (cancelled) return;
+    const chunks = sentences(speakable(markdown));
+    for (const chunk of chunks) {
       pending++;
-      u.onstart = () => onLevel?.(true);
-      u.onend = u.onerror = () => {
-        pending--;
-        if (pending === 0) onLevel?.(false);
-        settle();
-      };
-      window.speechSynthesis.speak(u);
+      remote = remote
+        .then(async () => {
+          if (cancelled) return;
+          onLevel?.(true);
+          await speakAI(chunk);
+        })
+        .catch(
+          () =>
+            new Promise<void>((resolve) => {
+              if (!speechSupported() || cancelled) return resolve();
+              const u = new SpeechSynthesisUtterance(chunk);
+              const voice = bestVoice(lang);
+              u.lang = voice?.lang || lang;
+              if (voice) u.voice = voice;
+              u.rate = 1.05;
+              u.onend = u.onerror = () => resolve();
+              window.speechSynthesis.speak(u);
+            }),
+        )
+        .finally(() => {
+          pending--;
+          if (pending === 0) onLevel?.(false);
+          settle();
+        });
     }
   }
   return {

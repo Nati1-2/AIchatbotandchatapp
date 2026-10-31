@@ -140,6 +140,25 @@ export function speakLocal(markdown: string): Promise<void> {
   });
 }
 
+/** Uses server-generated audio in browsers without the Web Speech API. */
+export async function speakGreeting(markdown: string): Promise<void> {
+  cancelSpeech();
+  try {
+    const audio = new Audio("/relay-greeting.wav");
+    await audio.play();
+    await new Promise<void>((resolve, reject) => {
+      audio.onended = () => resolve();
+      audio.onerror = () => reject(new Error("Greeting playback failed."));
+    });
+  } catch {
+    try {
+      await speakAI(speakable(markdown));
+    } catch {
+      await speakLocal(markdown);
+    }
+  }
+}
+
 // Prefer natural/neural voices (e.g. "Google US English", "Microsoft Aria Online (Natural)").
 function bestVoice(lang: string) {
   const voices = window.speechSynthesis.getVoices();

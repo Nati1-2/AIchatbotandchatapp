@@ -1,4 +1,4 @@
-import asyncio, base64, json, time
+import asyncio, base64, io, json, time, wave
 from datetime import timedelta
 from uuid import uuid4
 import httpx
@@ -46,50 +46,51 @@ class Provider:
                             yield {"delta": choice["delta"]["content"]}
 
     async def speech(self, text: str):
-        """Generate WAV speech with Gemini's native TTS endpoint."""
+        """Generate WAV speech with Gemini's native audio response."""
         base = settings.ai_base_url.rstrip("/")
         if base.endswith("/openai"):
             base = base[: -len("/openai")]
         async with httpx.AsyncClient(timeout=settings.ai_timeout_seconds) as client:
             response = await client.post(
-                base + "/interactions",
+                base + f"/models/{settings.ai_tts_model}:generateContent",
                 headers={
                     "x-goog-api-key": settings.ai_api_key,
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": settings.ai_tts_model,
-                    "input": [
-                        {
-                            "type": "user_input",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": text,
-                                    "annotations": [
-                                        {
-                                            "type": "speech_metadata",
-                                            "style": "warm, natural, and conversational",
-                                        }
-                                    ],
-                                }
-                            ],
-                        }
-                    ],
-                    "response_format": {"type": "audio", "mime_type": "audio/wav"},
-                    "generation_config": {"speech_config": [{"voice": "Kore"}]},
+                    "contents": [{"parts": [{"text": "Say naturally and warmly: " + text}]}],
+                    "generationConfig": {
+                        "responseModalities": ["AUDIO"],
+                        "speechConfig": {
+                            "voiceConfig": {
+                                "prebuiltVoiceConfig": {"voiceName": "Kore"}
+                            }
+                        },
+                    },
                 },
             )
             response.raise_for_status()
             payload = response.json()
         audio = None
-        for step in payload.get("steps", []):
-            for item in step.get("content", []):
-                if item.get("type") == "audio" and item.get("data"):
-                    audio = item["data"]
+        mime_type = ""
+        for candidate in payload.get("candidates", []):
+            for part in candidate.get("content", {}).get("parts", []):
+                inline = part.get("inlineData", {})
+                if inline.get("data"):
+                    audio = inline["data"]
+                    mime_type = inline.get("mimeType", "")
         if not audio:
             raise ValueError("The speech provider returned no audio.")
-        return base64.b64decode(audio)
+        raw = base64.b64decode(audio)
+        if mime_type.startswith("audio/L16"):
+            output = io.BytesIO()
+            with wave.open(output, "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(24000)
+                wav.writeframes(raw)
+            return output.getvalue()
+        return raw
 
     async def transcribe(self, audio: str, mime_type: str):
         """Transcribe recorded browser audio with Gemini, without Web Speech."""

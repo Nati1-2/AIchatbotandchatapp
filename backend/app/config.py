@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     ai_model: str = "gemini-2.5-flash"
-    ai_tts_model: str = "gemini-3.8-flash-tts"
+    ai_tts_model: str = "gemini-2.5-flash-preview-tts"
     ai_daily_limit: int = 50
     ai_timeout_seconds: int = 60
     ai_context_chars: int = 24000

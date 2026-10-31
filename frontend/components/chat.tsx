@@ -35,6 +35,7 @@ import {
   cancelSpeech,
   createSpeaker,
   speechSupported,
+  speakLocal,
 } from "@/lib/voice";
 import { VoiceLive, type VoiceState } from "./voice-live";
 import ReactMarkdown from "react-markdown";
@@ -386,11 +387,8 @@ export function Chat({
     const greeting = "Hi, I’m Relay. What would you like to talk about?";
     setCaption(greeting);
     setVoice("speaking");
-    const out = createSpeaker();
-    speaker.current = out;
-    out.push(greeting);
-    await out.finish();
-    if (speaker.current === out) speaker.current = null;
+    // Start within the click event so browser autoplay rules cannot silence it.
+    await speakLocal(greeting);
     if (voiceOn.current && !held.current) listen();
   }
   // Silences the reply and stops generating it, so the next turn isn't blocked.

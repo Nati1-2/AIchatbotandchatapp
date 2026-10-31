@@ -122,6 +122,24 @@ export function cancelSpeech() {
   cancelAISpeech();
 }
 
+/** Starts browser speech immediately, preserving the user's click activation. */
+export function speakLocal(markdown: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (!speechSupported()) return resolve();
+    const text = speakable(markdown);
+    if (!text) return resolve();
+    window.speechSynthesis.cancel();
+    const lang = navigator.language || "en-US";
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = bestVoice(lang);
+    utterance.lang = voice?.lang || lang;
+    if (voice) utterance.voice = voice;
+    utterance.rate = 1.03;
+    utterance.onend = utterance.onerror = () => resolve();
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
 // Prefer natural/neural voices (e.g. "Google US English", "Microsoft Aria Online (Natural)").
 function bestVoice(lang: string) {
   const voices = window.speechSynthesis.getVoices();

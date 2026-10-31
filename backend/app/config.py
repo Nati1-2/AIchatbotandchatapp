@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     ai_context_chars: int = 24000
 
     def model_post_init(self, __context):
+        if self.database_url.startswith("postgres://"):
+            self.database_url = self.database_url.replace(
+                "postgres://", "postgresql+asyncpg://", 1
+            )
+        elif self.database_url.startswith("postgresql://") and not self.database_url.startswith(
+            "postgresql+asyncpg://"
+        ):
+            self.database_url = self.database_url.replace(
+                "postgresql://", "postgresql+asyncpg://", 1
+            )
+
         if self.frontend_origin == "*" or (
             self.environment == "production" and not self.secure_cookies
         ):

@@ -6,8 +6,9 @@ RUN uv sync --frozen --no-dev
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./
-RUN useradd --create-home relay && chown -R relay:relay /app
+COPY start.sh ./
+RUN chmod +x start.sh && useradd --create-home relay && chown -R relay:relay /app
 USER relay
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 EXPOSE 8000
-CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000","--no-access-log","--ws-max-size","16384"]
+CMD ["./start.sh"]

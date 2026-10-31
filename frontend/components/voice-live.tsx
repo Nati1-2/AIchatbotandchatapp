@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Mic, Pause, Play, Sparkles, Volume2, X } from "lucide-react";
+import { Mic, MicOff, Sparkles, Volume2, X } from "lucide-react";
 import { speakable } from "@/lib/voice";
 
 export type VoiceState = "off" | "listening" | "thinking" | "speaking" | "held";
@@ -48,7 +48,7 @@ export function VoiceLive({
         ? "Thinking"
         : state === "speaking"
           ? "Speaking"
-          : "On hold";
+          : "Microphone muted";
   const statusDetail =
     state === "listening"
       ? "Speak naturally — I’ll answer when you pause"
@@ -56,7 +56,7 @@ export function VoiceLive({
         ? "Putting together a response"
         : state === "speaking"
           ? "Tap the wave to jump in"
-          : "Your conversation is paused";
+          : "Tap unmute when you’re ready to speak";
   return createPortal(
     <div
       className={`live live-${state}`}
@@ -93,7 +93,7 @@ export function VoiceLive({
         )}
         {state === "speaking" && <p className="live-ai">{tail || "…"}</p>}
         {state === "held" && (
-          <p className="live-hint">On hold. Resume when you’re ready.</p>
+          <p className="live-hint">Your microphone is muted.</p>
         )}
       </div>
       <div className="live-visual-wrap">
@@ -133,12 +133,12 @@ export function VoiceLive({
         <span className="live-control">
           <button
             type="button"
-            aria-label={state === "held" ? "Resume" : "Hold"}
+            aria-label={state === "held" ? "Unmute microphone" : "Mute microphone"}
             onClick={state === "held" ? onResume : onHold}
           >
-            {state === "held" ? <Play size={24} /> : <Pause size={24} />}
+            {state === "held" ? <Mic size={24} /> : <MicOff size={24} />}
           </button>
-          {state === "held" ? "Resume" : "Hold"}
+          {state === "held" ? "Unmute" : "Mute"}
         </span>
         <span className="live-control">
           <button

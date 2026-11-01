@@ -10,18 +10,21 @@ ENV NEXT_PUBLIC_API_URL="" NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ------------------------------------------------------------
-# Stage 2: All-in-One Container (Python + Node.js + Caddy)
+# Stage 2: All-in-One Container (Python + Node.js + Nginx)
 # ------------------------------------------------------------
 FROM python:3.12-slim
+
+# Install Nginx and curl via Debian packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy uv for python package management
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
 
-# Copy Node.js from official node image (both debian bookworm)
+# Copy Node.js from official node image
 COPY --from=node:24-slim /usr/local /usr/local
-
-# Copy Caddy static binary
-COPY --from=caddy:2-alpine /usr/bin/caddy /usr/local/bin/caddy
 
 WORKDIR /app
 
@@ -39,8 +42,8 @@ COPY --from=frontend-builder /app/.next/standalone ./frontend-dist
 COPY --from=frontend-builder /app/.next/static ./frontend-dist/.next/static
 COPY --from=frontend-builder /app/public ./frontend-dist/public
 
-# Copy Caddyfile and startup entrypoint
-COPY Caddyfile ./Caddyfile
+# Copy Nginx configuration and entrypoint script
+COPY nginx.conf /etc/nginx/nginx.conf
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
@@ -49,4 +52,3 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 NODE_ENV=production ENVIRONME
 EXPOSE 10000
 
 CMD ["./entrypoint.sh"]
-

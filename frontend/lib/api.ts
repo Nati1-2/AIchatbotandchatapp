@@ -1,4 +1,24 @@
+export function getApi(): string {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("relay_api_url");
+    if (saved) return saved.replace(/\/+$/, "");
+  }
+  return (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+}
+
+export function setApiUrl(url: string) {
+  if (typeof window !== "undefined") {
+    const clean = url.trim().replace(/\/+$/, "");
+    if (clean) {
+      localStorage.setItem("relay_api_url", clean);
+    } else {
+      localStorage.removeItem("relay_api_url");
+    }
+  }
+}
+
 export const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 let csrf = "";
 export function setCsrf(value: string) {
   csrf = value;
@@ -12,7 +32,8 @@ export class ApiError extends Error {
   }
 }
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(API + path, {
+  const baseUrl = getApi();
+  const response = await fetch(baseUrl + path, {
     ...init,
     credentials: "include",
     headers: {
@@ -44,7 +65,8 @@ export function cancelAISpeech() {
 }
 export async function speakAI(text: string) {
   speechRequest = new AbortController();
-  const response = await fetch(API + "/ai/speech", {
+  const baseUrl = getApi();
+  const response = await fetch(baseUrl + "/ai/speech", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
@@ -85,7 +107,8 @@ export function upload(
 ): Promise<{ id: string; filename: string; status: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", API + `/conversations/${cid}/attachments`);
+    const baseUrl = getApi();
+    xhr.open("POST", baseUrl + `/conversations/${cid}/attachments`);
     xhr.withCredentials = true;
     xhr.setRequestHeader("X-CSRF-Token", csrf);
     xhr.upload.onprogress = (e) => {
@@ -116,7 +139,8 @@ export async function streamAI(
   onEvent: (type: string, data: Record<string, unknown>) => void,
   signal: AbortSignal,
 ) {
-  const response = await fetch(API + `/conversations/${cid}/ai/stream`, {
+  const baseUrl = getApi();
+  const response = await fetch(baseUrl + `/conversations/${cid}/ai/stream`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },

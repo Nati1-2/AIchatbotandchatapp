@@ -15,7 +15,7 @@ import {
   Plus,
   LoaderCircle,
 } from "lucide-react";
-import { api, mutate, API } from "@/lib/api";
+import { api, mutate, getApi } from "@/lib/api";
 import type { Conversation, RelayEvent, User } from "@/lib/types";
 import { reconnectDelay } from "@/lib/messages";
 import { useUI } from "@/lib/store";
@@ -82,7 +82,7 @@ export function Workspace({
     const seen = new Set<string>();
     function connect() {
       if (disposed) return;
-      const ws = new WebSocket(API.replace(/^http/, "ws") + "/ws");
+      const ws = new WebSocket(getApi().replace(/^http/, "ws") + "/ws");
       socket.current = ws;
       ws.onopen = () => {
         attempt = 0;

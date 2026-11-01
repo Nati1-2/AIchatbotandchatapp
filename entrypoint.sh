@@ -14,3 +14,4 @@ PORT=3000 HOSTNAME=127.0.0.1 node /app/frontend-dist/server.js &
 
 echo "4. Starting reverse proxy on port ${PORT:-10000}..."
 exec caddy run --config /app/Caddyfile --adapter caddyfile
+

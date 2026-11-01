@@ -49,3 +49,4 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 NODE_ENV=production ENVIRONME
 EXPOSE 10000
 
 CMD ["./entrypoint.sh"]
+

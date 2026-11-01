@@ -35,8 +35,7 @@ from .events import r, publish, limit
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("relay")
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+async def init_schema_and_demo():
     try:
         from .models import Base, User
         from .db import engine, SessionLocal
@@ -45,7 +44,6 @@ async def lifespan(app: FastAPI):
             await conn.run_sync(Base.metadata.create_all)
         log.info("Database schema verified and tables ensured.")
 
-        # Ensure demo accounts exist
         async with SessionLocal() as db:
             for username, name in [("alex", "Alex Morgan"), ("jordan", "Jordan Lee")]:
                 u = await db.scalar(select(User).where(User.username == username))
@@ -60,6 +58,10 @@ async def lifespan(app: FastAPI):
             log.info("Demo users (alex, jordan) verified.")
     except Exception as e:
         log.error(f"Database initialization warning: {e}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(init_schema_and_demo())
     yield
 
 app = FastAPI(title="Relay API", version="1.0.0", lifespan=lifespan)

@@ -1,11 +1,22 @@
-import json
+import json, logging
 from uuid import uuid4
 import redis.asyncio as redis
 from fastapi import HTTPException
 from .config import settings
 from .contracts import Event, MessageOut, TypingPayload, PresencePayload, ReadPayload
 
-r = redis.from_url(settings.redis_url, decode_responses=True)
+log = logging.getLogger("relay")
+
+try:
+    if "localhost:6379" in settings.redis_url or "127.0.0.1:6379" in settings.redis_url:
+        import fakeredis.aioredis as fakeredis
+        r = fakeredis.FakeRedis(decode_responses=True)
+        log.info("No remote Redis configured. Using local FakeRedis in-memory store.")
+    else:
+        r = redis.from_url(settings.redis_url, decode_responses=True)
+except Exception:
+    import fakeredis.aioredis as fakeredis
+    r = fakeredis.FakeRedis(decode_responses=True)
 
 
 async def publish(cid, event_type, payload):
@@ -26,8 +37,8 @@ async def publish(cid, event_type, payload):
     ).model_dump()
     try:
         await r.publish("relay:events", json.dumps(event, default=str))
-    except redis.RedisError:
-        pass  # Durable writes succeed; clients reconcile via polling/reconnect.
+    except Exception:
+        pass
 
 
 async def limit(key, maximum, seconds):

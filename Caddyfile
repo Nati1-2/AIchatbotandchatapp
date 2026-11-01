@@ -1,0 +1,22 @@
+{
+    admin off
+    auto_https off
+}
+
+:{$PORT:10000} {
+    # Real-time WebSocket connection to FastAPI backend
+    handle /ws* {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    # API endpoints routed to FastAPI backend
+    @api path /auth* /conversations* /users* /ai* /health /ready /docs* /openapi.json
+    handle @api {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    # All UI routes and Next.js assets routed to standalone Next.js server
+    handle {
+        reverse_proxy 127.0.0.1:3000
+    }
+}

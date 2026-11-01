@@ -82,7 +82,11 @@ export function Workspace({
     const seen = new Set<string>();
     function connect() {
       if (disposed) return;
-      const ws = new WebSocket(getApi().replace(/^http/, "ws") + "/ws");
+      const apiBase = getApi();
+      const wsUrl = apiBase
+        ? apiBase.replace(/^http/, "ws") + "/ws"
+        : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
+      const ws = new WebSocket(wsUrl);
       socket.current = ws;
       ws.onopen = () => {
         attempt = 0;

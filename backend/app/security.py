@@ -25,8 +25,16 @@ async def current_user(request: Request, db=Depends(database)):
         raise HTTPException(401, "Please sign in again.")
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         req_origin = (request.headers.get("origin") or "").rstrip("/")
-        cfg_origin = settings.frontend_origin.rstrip("/")
-        if req_origin != cfg_origin or not secrets.compare_digest(
+        host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").rstrip("/")
+        proto = request.headers.get("x-forwarded-proto") or "https"
+        same_origin = f"{proto}://{host}".rstrip("/")
+        is_valid_origin = (
+            not req_origin
+            or req_origin == same_origin
+            or (settings.frontend_origin and req_origin == settings.frontend_origin.rstrip("/"))
+            or settings.environment != "production"
+        )
+        if not is_valid_origin or not secrets.compare_digest(
             request.headers.get("x-csrf-token", ""), session.csrf
         ):
             raise HTTPException(403, "Invalid CSRF token or origin.")

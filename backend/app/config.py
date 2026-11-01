@@ -7,11 +7,11 @@ ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT_ENV, extra="ignore")
-    environment: str = "development"
+    environment: str = "production"
     database_url: str = "postgresql+asyncpg://relay:relay@localhost:5432/relay"
     redis_url: str = "redis://localhost:6379/0"
-    frontend_origin: str = "http://localhost:3000"
-    secure_cookies: bool = False
+    frontend_origin: str = ""
+    secure_cookies: bool = True
     session_days: int = 14
     s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "relay-local"
@@ -38,12 +38,8 @@ class Settings(BaseSettings):
                 "postgresql://", "postgresql+asyncpg://", 1
             )
 
-        if self.frontend_origin == "*" or (
-            self.environment == "production" and not self.secure_cookies
-        ):
-            raise ValueError(
-                "Explicit origin and production Secure cookies are required"
-            )
+        if self.frontend_origin:
+            self.frontend_origin = self.frontend_origin.rstrip("/")
 
 
 settings = Settings()

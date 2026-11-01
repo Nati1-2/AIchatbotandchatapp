@@ -2,6 +2,9 @@ export function getApi(): string {
   if (typeof window !== "undefined") {
     const saved = localStorage.getItem("relay_api_url");
     if (saved) return saved.replace(/\/+$/, "");
+    if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+      return "";
+    }
   }
   return (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
 }

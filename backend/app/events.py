@@ -31,12 +31,16 @@ async def publish(cid, event_type, payload):
 
 
 async def limit(key, maximum, seconds):
-    # Increment and expiration are atomic even if the process exits mid-request.
-    count = await r.eval(
-        "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]) end; return n",
-        1,
-        key,
-        seconds,
-    )
-    if int(count) > maximum:
-        raise HTTPException(429, "Too many requests. Please try again later.")
+    try:
+        count = await r.eval(
+            "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]) end; return n",
+            1,
+            key,
+            seconds,
+        )
+        if int(count) > maximum:
+            raise HTTPException(429, "Too many requests. Please try again later.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass

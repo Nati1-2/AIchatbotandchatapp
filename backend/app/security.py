@@ -20,7 +20,12 @@ def aware(dt):
 
 async def current_user(request: Request, db=Depends(database)):
     token = request.cookies.get("relay_session", "")
-    session = await db.get(Session, digest(token))
+    if not token:
+        raise HTTPException(401, "Please sign in again.")
+    try:
+        session = await db.get(Session, digest(token))
+    except Exception:
+        raise HTTPException(401, "Please sign in again.")
     if not session or aware(session.expires_at) <= now():
         raise HTTPException(401, "Please sign in again.")
     if request.method not in ("GET", "HEAD", "OPTIONS"):

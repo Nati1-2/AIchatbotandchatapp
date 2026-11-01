@@ -35,7 +35,19 @@ from .events import r, publish, limit
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("relay")
-app = FastAPI(title="Relay API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        from .models import Base
+        from .db import engine
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        log.info("Database schema verified and tables ensured.")
+    except Exception as e:
+        log.error(f"Database initialization warning: {e}")
+    yield
+
+app = FastAPI(title="Relay API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r".*",

@@ -21,6 +21,8 @@ export function setApiUrl(url: string) {
 }
 
 
+export const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "");
+
 let csrf = "";
 export function setCsrf(value: string) {
   csrf = value;

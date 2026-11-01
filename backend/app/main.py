@@ -155,8 +155,20 @@ async def ready(db=Depends(database)):
 
 
 def check_origin(request):
-    if request.headers.get("origin") != settings.frontend_origin:
-        raise HTTPException(403, "Invalid origin.")
+    """Validate Origin header for login/register."""
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    if not origin:
+        return
+    if settings.frontend_origin and origin == settings.frontend_origin:
+        return
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "")
+    proto = request.headers.get("x-forwarded-proto") or "https"
+    same = f"{proto}://{host}".rstrip("/")
+    if origin == same:
+        return
+    if settings.environment != "production":
+        return
+    raise HTTPException(403, "Invalid origin.")
 
 
 async def auth_limit(request, username):
@@ -690,7 +702,17 @@ async def receipt(
 
 @app.websocket("/ws")
 async def websocket(ws: WebSocket):
-    if ws.headers.get("origin") != settings.frontend_origin:
+    ws_origin = (ws.headers.get("origin") or "").rstrip("/")
+    ws_host = (ws.headers.get("x-forwarded-host") or ws.headers.get("host") or "")
+    ws_proto = ws.headers.get("x-forwarded-proto") or "https"
+    ws_same = f"{ws_proto}://{ws_host}".rstrip("/")
+    origin_ok = (
+        not ws_origin
+        or ws_origin == ws_same
+        or (settings.frontend_origin and ws_origin == settings.frontend_origin)
+        or settings.environment != "production"
+    )
+    if not origin_ok:
         await ws.close(code=4403)
         return
     session_id = digest(ws.cookies.get("relay_session", ""))

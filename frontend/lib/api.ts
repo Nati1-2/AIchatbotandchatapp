@@ -20,7 +20,6 @@ export function setApiUrl(url: string) {
   }
 }
 
-export const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 let csrf = "";
 export function setCsrf(value: string) {

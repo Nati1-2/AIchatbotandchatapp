@@ -30,7 +30,7 @@ WORKDIR /app
 
 # Install backend dependencies
 COPY backend/pyproject.toml backend/uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --no-dev
 
 # Copy backend application, migrations, and config
 COPY backend/app ./app

@@ -42,9 +42,16 @@ export default function Page() {
       <Brand />
       <h2>We couldn’t reach Relay.</h2>
       <p className="muted">
-        Check your connection and make sure the API is running.
+        {session.error instanceof Error
+          ? session.error.message
+          : "Check your connection and make sure the API is running."}
       </p>
-      <Button onClick={() => void session.refetch()}>Try again</Button>
+      <div className="text-xs text-muted-foreground font-mono opacity-80 mt-2 p-2 bg-secondary/30 rounded border border-border">
+        Target API: {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000 (Default)"}
+      </div>
+      <div className="mt-4">
+        <Button onClick={() => void session.refetch()}>Try again</Button>
+      </div>
     </main>
   );
 }

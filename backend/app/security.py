@@ -24,9 +24,9 @@ async def current_user(request: Request, db=Depends(database)):
     if not session or aware(session.expires_at) <= now():
         raise HTTPException(401, "Please sign in again.")
     if request.method not in ("GET", "HEAD", "OPTIONS"):
-        if request.headers.get(
-            "origin"
-        ) != settings.frontend_origin or not secrets.compare_digest(
+        req_origin = (request.headers.get("origin") or "").rstrip("/")
+        cfg_origin = settings.frontend_origin.rstrip("/")
+        if req_origin != cfg_origin or not secrets.compare_digest(
             request.headers.get("x-csrf-token", ""), session.csrf
         ):
             raise HTTPException(403, "Invalid CSRF token or origin.")
@@ -57,7 +57,7 @@ async def new_session(db, user, response):
         token,
         httponly=True,
         secure=settings.secure_cookies,
-        samesite="lax",
+        samesite="none" if settings.secure_cookies else "lax",
         max_age=settings.session_days * 86400,
         path="/",
     )

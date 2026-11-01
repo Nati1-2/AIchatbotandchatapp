@@ -38,10 +38,10 @@ log = logging.getLogger("relay")
 app = FastAPI(title="Relay API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origins=[settings.frontend_origin.rstrip("/")],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Content-Type", "X-CSRF-Token"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -195,7 +195,7 @@ async def logout(
 ):
     await db.delete(await db.get(Session, request.state.session.id))
     await db.commit()
-    response.delete_cookie("relay_session", path="/")
+    response.delete_cookie("relay_session", path="/", secure=settings.secure_cookies, samesite="none" if settings.secure_cookies else "lax")
 
 
 @app.delete("/auth/sessions", status_code=204)
@@ -204,7 +204,7 @@ async def revoke(response: Response, user=Depends(current_user), db=Depends(data
 
     await db.execute(delete(Session).where(Session.user_id == user.id))
     await db.commit()
-    response.delete_cookie("relay_session", path="/")
+    response.delete_cookie("relay_session", path="/", secure=settings.secure_cookies, samesite="none" if settings.secure_cookies else "lax")
 
 
 @app.patch("/profile", response_model=UserOut)

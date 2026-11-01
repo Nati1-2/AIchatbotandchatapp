@@ -28,7 +28,7 @@ const schema = z.object({
 // Accounts created by backend/app/seed.py, which only runs in development.
 const DEMO_PASSWORD = "Relay-demo-2026!";
 const DEMO_USERS = ["alex", "jordan"];
-const SHOW_DEMO = process.env.NODE_ENV === "development";
+const SHOW_DEMO = true;
 export function Brand() {
   return (
     <span className="brand">

@@ -38,11 +38,26 @@ log = logging.getLogger("relay")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        from .models import Base
-        from .db import engine
+        from .models import Base, User
+        from .db import engine, SessionLocal
+        from .security import hasher
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         log.info("Database schema verified and tables ensured.")
+
+        # Ensure demo accounts exist
+        async with SessionLocal() as db:
+            for username, name in [("alex", "Alex Morgan"), ("jordan", "Jordan Lee")]:
+                u = await db.scalar(select(User).where(User.username == username))
+                if not u:
+                    u = User(
+                        username=username,
+                        display_name=name,
+                        password_hash=hasher.hash("Relay-demo-2026!"),
+                    )
+                    db.add(u)
+            await db.commit()
+            log.info("Demo users (alex, jordan) verified.")
     except Exception as e:
         log.error(f"Database initialization warning: {e}")
     yield

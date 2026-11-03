@@ -61,7 +61,10 @@ async def init_schema_and_demo():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(init_schema_and_demo())
+    # Finish schema/demo initialization before accepting traffic.  Starting it
+    # in the background made fresh deployments intermittently reject the demo
+    # login while the database was still being prepared.
+    await init_schema_and_demo()
     yield
 
 app = FastAPI(title="Relay API", version="1.0.0", lifespan=lifespan)

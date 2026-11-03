@@ -4,7 +4,7 @@
 FROM node:24-alpine AS frontend-builder
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm install
+RUN npm ci
 COPY frontend/ ./
 ENV NEXT_PUBLIC_API_URL="" NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
@@ -30,7 +30,7 @@ WORKDIR /app
 
 # Install backend dependencies
 COPY backend/pyproject.toml backend/uv.lock ./
-RUN uv sync --no-dev
+RUN uv sync --frozen --no-dev
 
 # Copy backend application, migrations, and config
 COPY backend/app ./app

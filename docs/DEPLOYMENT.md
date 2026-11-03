@@ -1,5 +1,19 @@
 # Deployment
 
+## Render (one-click Blueprint)
+
+The repository root contains `render.yaml`. In Render, choose **New > Blueprint**,
+connect this repository, and deploy it. The Blueprint creates one Docker web
+service, a PostgreSQL database, and a private Key Value instance; wires their
+connection URLs automatically; and serves the frontend, API, and WebSocket
+endpoint from the same HTTPS domain. No public API URL or CORS setting is needed.
+
+`AI_API_KEY` is optional. Set it to a Gemini API key to enable AI features; normal
+messaging and the demo accounts work without it.
+
+After deployment, verify `https://YOUR-SERVICE.onrender.com/health`, then sign in
+with `alex` / `Relay-demo-2026!` or `jordan` / `Relay-demo-2026!`.
+
 ## Frontend host
 
 Deploy `frontend/` to a Next.js-compatible host (for example a Node host running the provided Dockerfile). Build with Node 24, `npm ci`, and `npm run build`. For a conventional Next host use `npm start`; for the standalone Docker output use `node server.js` as in the Dockerfile. Set **build-time** `NEXT_PUBLIC_API_URL=https://api.example.com`. Rebuild whenever the API public URL changes.

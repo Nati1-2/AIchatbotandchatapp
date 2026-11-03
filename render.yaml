@@ -1,15 +1,38 @@
 services:
-  # All-in-One Service: Runs Next.js frontend + FastAPI backend on the same domain
+  - type: keyvalue
+    name: relay-cache
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: off
+
+  # One public URL serves the Next.js frontend, FastAPI API, and WebSockets.
   - type: web
     name: relay
     runtime: docker
     dockerfilePath: Dockerfile
     plan: free
     healthCheckPath: /health
+    autoDeployTrigger: commit
     envVars:
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: relay-db
+          property: connectionString
       - key: REDIS_URL
-        sync: false
+        fromService:
+          name: relay-cache
+          type: keyvalue
+          property: connectionString
       - key: AI_API_KEY
         sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: SECURE_COOKIES
+        value: "true"
+
+databases:
+  - name: relay-db
+    plan: free
+    databaseName: relay
+    user: relay

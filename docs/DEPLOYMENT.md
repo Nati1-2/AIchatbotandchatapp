@@ -1,5 +1,17 @@
 # Deployment
 
+## CI/CD
+
+GitHub Actions runs `.github/workflows/ci.yml` for every pull request and every
+push to `main`. It type-checks, tests, and builds the frontend; compiles and
+tests the backend; and then builds the same production Docker image used by
+Render. Concurrent runs for an outdated commit are cancelled automatically.
+
+The Render Blueprint uses `autoDeployTrigger: checksPass`, so a push to `main`
+is deployed only after the workflow succeeds. In Render, keep the repository's
+GitHub connection authorized to report checks. Protecting `main` with the
+`Frontend`, `Backend`, and `Production container` checks is recommended.
+
 ## Render (one-click Blueprint)
 
 The repository root contains `render.yaml`. In Render, choose **New > Blueprint**,

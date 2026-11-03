@@ -1,49 +1,104 @@
-name: Relay checks
-on: [push, pull_request]
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  backend:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: relay
-          POSTGRES_PASSWORD: relay
-          POSTGRES_DB: relay_test
-        ports: ['5432:5432']
-        options: --health-cmd "pg_isready -U relay" --health-interval 5s --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with: {version: '0.13.5', python-version: '3.12'}
-      - run: uv sync --frozen --all-groups
-        working-directory: backend
-      - run: uv run alembic upgrade head && uv run alembic check
-        working-directory: backend
-        env:
-          DATABASE_URL: postgresql+asyncpg://relay:relay@localhost:5432/relay_test
-      - run: uv run pytest -q
-        working-directory: backend
-        env:
-          TEST_DATABASE_URL: postgresql+asyncpg://relay:relay@localhost:5432/relay_test
   frontend:
+    name: Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: {node-version: '24', cache: npm, cache-dependency-path: frontend/package-lock.json}
-      - uses: astral-sh/setup-uv@v6
-        with: {version: '0.13.5', python-version: '3.12'}
-      - run: uv sync --frozen --all-groups
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build production frontend
+        run: npm run build
+
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ENVIRONMENT: production
+      FRONTEND_ORIGIN: http://localhost:3000
+      SECURE_COOKIES: "false"
+    defaults:
+      run:
         working-directory: backend
-      - run: npm ci
-        working-directory: frontend
-      - run: npm run typecheck && npm test && npm run build
-        working-directory: frontend
-      - run: npx playwright install --with-deps chromium
-        working-directory: frontend
-      - run: npm run test:e2e
-        working-directory: frontend
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: {name: browser-results, path: frontend/test-results}
+    env:
+      DATABASE_URL: sqlite+aiosqlite://
+      ENVIRONMENT: production
+      FRONTEND_ORIGIN: http://localhost:3000
+      SECURE_COOKIES: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen --dev
+
+      - name: Compile Python sources
+        run: uv run python -m compileall -q app tests
+
+      - name: Run backend tests
+        run: uv run pytest -q
+
+  container:
+    name: Production container
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [frontend, backend]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build production image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

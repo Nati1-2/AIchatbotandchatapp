@@ -13,7 +13,8 @@ services:
     dockerfilePath: Dockerfile
     plan: free
     healthCheckPath: /health
-    autoDeployTrigger: commit
+    # Deploy main only after the GitHub Actions checks in .github/workflows/ci.yml pass.
+    autoDeployTrigger: checksPass
     envVars:
       - key: DATABASE_URL
         fromDatabase:

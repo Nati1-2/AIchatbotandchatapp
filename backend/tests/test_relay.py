@@ -5,6 +5,12 @@ from sqlalchemy import select
 from app.models import Session, Message, Generation, Attachment, now
 from app import ai
 from app.config import settings
+from app.main import DEMO_PASSWORD_HASH
+from app.security import hasher
+
+
+def test_demo_password_hash_matches_documented_password():
+    assert hasher.verify(DEMO_PASSWORD_HASH, "Relay-demo-2026!")
 
 
 async def direct(a, b):

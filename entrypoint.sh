@@ -30,11 +30,12 @@ trap cleanup EXIT INT TERM
 
 echo "5. Waiting for backend & frontend services to bind ports..."
 attempt=0
+STARTUP_TIMEOUT_SECONDS="${STARTUP_TIMEOUT_SECONDS:-120}"
 until curl --fail --silent http://127.0.0.1:8000/health >/dev/null \
     && curl --fail --silent http://127.0.0.1:3000/ >/dev/null; do
     attempt=$((attempt + 1))
-    if [ "$attempt" -ge 30 ]; then
-        echo "Backend or frontend failed to become ready."
+    if [ "$attempt" -ge "$STARTUP_TIMEOUT_SECONDS" ]; then
+        echo "Backend or frontend failed to become ready within ${STARTUP_TIMEOUT_SECONDS}s."
         exit 1
     fi
     if ! kill -0 "$BACKEND_PID" 2>/dev/null || ! kill -0 "$FRONTEND_PID" 2>/dev/null; then

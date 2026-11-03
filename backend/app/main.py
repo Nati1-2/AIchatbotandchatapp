@@ -36,11 +36,20 @@ from .events import r, publish, limit
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("relay")
+
+# Demo credentials are public, so computing a production-strength Argon2 hash
+# for them on every cold start adds no security. This precomputed, valid
+# Argon2id hash keeps Render's resource-constrained free instances responsive.
+DEMO_PASSWORD_HASH = (
+    "$argon2id$v=19$m=8192,t=1,p=1$Ej46s1wDIlHqfsVKobZmqA$"
+    "fh6lj7FikQZN06OYvc3sKUeH5fzPO0T80tnVlvkU7Rw"
+)
+
+
 async def init_schema_and_demo():
     try:
         from .models import Base, User
         from .db import engine, SessionLocal
-        from .security import hasher
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         log.info("Database schema verified and tables ensured.")
@@ -52,9 +61,12 @@ async def init_schema_and_demo():
                     u = User(
                         username=username,
                         display_name=name,
-                        password_hash=hasher.hash("Relay-demo-2026!"),
+                        password_hash=DEMO_PASSWORD_HASH,
                     )
                     db.add(u)
+                else:
+                    # Demo accounts intentionally keep the documented password.
+                    u.password_hash = DEMO_PASSWORD_HASH
             await db.commit()
             log.info("Demo users (alex, jordan) verified.")
     except Exception as e:

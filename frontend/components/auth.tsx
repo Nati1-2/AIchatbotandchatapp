@@ -25,7 +25,7 @@ const schema = z.object({
   password: z.string().min(10, "Use at least 10 characters.").max(128),
   display_name: z.string().max(80),
 });
-// Accounts created by backend/app/seed.py, which only runs in development.
+// Accounts are ensured during backend startup in every environment.
 const DEMO_PASSWORD = "Relay-demo-2026!";
 const DEMO_USERS = ["alex", "jordan"];
 const SHOW_DEMO = true;

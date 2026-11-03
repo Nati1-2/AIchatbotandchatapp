@@ -223,6 +223,27 @@ async def test_auth_validation_and_cross_origin(clients):
     ).status_code == 403
 
 
+async def test_auth_accepts_public_https_origin_behind_proxy(clients):
+    a, _, _ = clients
+    a.headers.update(
+        {
+            "origin": "https://relay.example",
+            "x-forwarded-host": "relay.example",
+            "x-forwarded-proto": "https,http",
+        }
+    )
+    login = await a.post(
+        "/auth/login",
+        json={"username": "alice", "password": "test-password-123"},
+    )
+    assert login.status_code == 200, login.text
+    a.headers["x-csrf-token"] = login.json()["csrf"]
+    profile = await a.patch(
+        "/profile", json={"display_name": "Alice Proxy", "show_presence": True}
+    )
+    assert profile.status_code == 200, profile.text
+
+
 async def test_summary_reauthorizes_and_rejects_changed_snapshot(clients, monkeypatch):
     a, b, c = clients
     private = await direct(b, c)

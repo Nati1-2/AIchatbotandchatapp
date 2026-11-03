@@ -30,6 +30,7 @@ from .security import (
     hasher,
     digest,
     aware,
+    valid_request_origin,
 )
 from .events import r, publish, limit
 
@@ -159,19 +160,8 @@ async def ready(db=Depends(database)):
 
 def check_origin(request):
     """Validate Origin header for login/register."""
-    origin = (request.headers.get("origin") or "").rstrip("/")
-    if not origin:
-        return
-    if settings.frontend_origin and origin == settings.frontend_origin:
-        return
-    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "")
-    proto = request.headers.get("x-forwarded-proto") or "https"
-    same = f"{proto}://{host}".rstrip("/")
-    if origin == same:
-        return
-    if settings.environment != "production":
-        return
-    raise HTTPException(403, "Invalid origin.")
+    if not valid_request_origin(request):
+        raise HTTPException(403, "Invalid origin.")
 
 
 async def auth_limit(request, username):

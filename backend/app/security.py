@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from .db import database
 from .models import Session, User, Membership, now
-from .config import settings
+from .config import ai_available, settings
 
 hasher = PasswordHasher()
 
@@ -81,7 +81,7 @@ async def new_session(db, user, response):
     return {
         "user": public_user(user),
         "csrf": csrf,
-        "ai_configured": bool(settings.ai_api_key),
+        "ai_configured": ai_available(),
     }
 
 

@@ -121,6 +121,60 @@ class Provider:
 provider = Provider()
 
 
+class DemoProvider:
+    """Small offline assistant used when no external model key is configured."""
+
+    async def stream(self, messages):
+        prompt = next(
+            (
+                str(message.get("content", ""))
+                for message in reversed(messages)
+                if message.get("role") == "user"
+            ),
+            "",
+        ).lower()
+        if "summarize" in prompt and "selected messages" in prompt:
+            answer = (
+                "Demo mode can’t reliably summarize arbitrary messages. "
+                "Add AI_API_KEY on the server for model-powered summaries."
+            )
+        elif "organize my week" in prompt or "plan my week" in prompt:
+            answer = (
+                "Here’s a simple plan: choose three priorities for the week, "
+                "assign one to each morning, reserve afternoons for smaller tasks, "
+                "and leave one open block for anything unexpected."
+            )
+        elif "explain" in prompt:
+            answer = (
+                "Tell me the topic and what you already know about it. In demo mode, "
+                "I can help structure the explanation; connect an AI_API_KEY for a "
+                "full model-generated answer."
+            )
+        elif "write" in prompt or "message" in prompt:
+            answer = (
+                "Share who the message is for, the outcome you want, and the tone. "
+                "I’ll help you shape a clear opening, the key point, and a friendly close."
+            )
+        elif "brainstorm" in prompt or "ideas" in prompt:
+            answer = (
+                "Try three directions: improve something you use every day, combine two "
+                "interests into one small project, or make a useful tool for a friend. "
+                "Pick one and keep the first version small enough to finish this weekend."
+            )
+        else:
+            answer = (
+                "Relay AI is running in built-in demo mode. I can help with simple "
+                "planning, writing prompts, and brainstorming. For open-ended model "
+                "answers, configure AI_API_KEY on the server."
+            )
+        for start in range(0, len(answer), 28):
+            await asyncio.sleep(0)
+            yield {"delta": answer[start : start + 28]}
+
+
+demo_provider = DemoProvider()
+
+
 def sse(event, data):
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
@@ -163,11 +217,8 @@ async def generate(
     await member(db, cid, user.id)
     if (await db.get(Conversation, cid)).kind != "ai":
         raise HTTPException(400, "Use a Relay AI conversation.")
-    if not settings.ai_api_key:
-        raise HTTPException(
-            503,
-            "Relay AI needs a server-side AI_API_KEY. Ask the administrator to configure it.",
-        )
+    if not settings.ai_api_key and not settings.ai_demo_mode:
+        raise HTTPException(503, "Relay AI is disabled on this server.")
     # One active generation per user across instances, with a bounded lease.
     lock = "ai:lock:" + user.id
     lock_token = str(uuid4())
@@ -286,7 +337,8 @@ async def generate(
         try:
             yield sse("start", {"generation_id": gid})
             async with asyncio.timeout(settings.ai_timeout_seconds):
-                async for chunk in provider.stream(context):
+                active_provider = provider if settings.ai_api_key else demo_provider
+                async for chunk in active_provider.stream(context):
                     if await r.exists("ai:stop:" + gid):
                         status = "cancelled"
                         yield sse("cancelled", {})

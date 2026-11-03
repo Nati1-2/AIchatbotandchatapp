@@ -27,6 +27,8 @@ services:
           property: connectionString
       - key: AI_API_KEY
         sync: false
+      - key: AI_DEMO_MODE
+        value: "true"
       - key: ENVIRONMENT
         value: production
       - key: SECURE_COOKIES

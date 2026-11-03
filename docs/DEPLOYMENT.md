@@ -20,8 +20,10 @@ service, a PostgreSQL database, and a private Key Value instance; wires their
 connection URLs automatically; and serves the frontend, API, and WebSocket
 endpoint from the same HTTPS domain. No public API URL or CORS setting is needed.
 
-`AI_API_KEY` is optional. Set it to a Gemini API key to enable AI features; normal
-messaging and the demo accounts work without it.
+`AI_API_KEY` is optional. Without it, text conversations use the clearly labeled
+built-in demo assistant. Set it to a Gemini API key to enable model-generated
+answers, transcription, and server-generated speech. Set `AI_DEMO_MODE=false`
+to disable the fallback entirely.
 
 After deployment, verify `https://YOUR-SERVICE.onrender.com/health`, then sign in
 with `alex` / `Relay-demo-2026!` or `jordan` / `Relay-demo-2026!`.

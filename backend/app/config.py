@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     s3_bucket: str = "relay-private"
     max_upload_bytes: int = 10 * 1024 * 1024
     ai_api_key: str = ""
+    ai_demo_mode: bool = True
     ai_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     ai_model: str = "gemini-2.5-flash"
     ai_tts_model: str = "gemini-2.5-flash-preview-tts"
@@ -43,3 +44,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def ai_available() -> bool:
+    return bool(settings.ai_api_key or settings.ai_demo_mode)

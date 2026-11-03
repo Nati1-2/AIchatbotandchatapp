@@ -13,6 +13,17 @@ def test_demo_password_hash_matches_documented_password():
     assert hasher.verify(DEMO_PASSWORD_HASH, "Relay-demo-2026!")
 
 
+async def test_offline_demo_provider_streams_without_api_key():
+    chunks = [
+        chunk
+        async for chunk in ai.demo_provider.stream(
+            [{"role": "user", "content": "Help me organize my week"}]
+        )
+    ]
+    answer = "".join(chunk["delta"] for chunk in chunks)
+    assert "three priorities" in answer
+
+
 async def direct(a, b):
     r = await a.post(
         "/conversations", json={"kind": "direct", "user_ids": [b.user["id"]]}

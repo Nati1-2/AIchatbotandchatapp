@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, func, or_, text
 from sqlalchemy.exc import IntegrityError
-from .config import settings
+from .config import ai_available, settings
 from .db import database, SessionLocal
 from .models import *
 from .schemas import *
@@ -228,7 +228,7 @@ async def me(request: Request, user=Depends(current_user)):
     return {
         "user": public_user(user),
         "csrf": request.state.session.csrf,
-        "ai_configured": bool(settings.ai_api_key),
+        "ai_configured": ai_available(),
     }
 
 

@@ -15,7 +15,8 @@ RUN npm run build
 FROM python:3.12-slim
 
 # Install Nginx and curl via Debian packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     nginx \
     curl \
     && rm -rf /var/lib/apt/lists/*

@@ -178,8 +178,7 @@ export function Workspace({
         c.title.toLowerCase().includes(search.toLowerCase()) &&
         (filter === "All" ||
           (filter === "Unread" && c.unread > 0) ||
-          (filter === "Groups" && c.kind === "group") ||
-          (filter === "AI" && c.kind === "ai")),
+          (filter === "Groups" && c.kind === "group")),
     )
     .sort(
       (a, b) =>
@@ -232,21 +231,24 @@ export function Workspace({
           />
           <kbd>⌕</kbd>
         </label>
-        <div
-          className="filters"
-          role="tablist"
-          aria-label="Conversation filters"
-        >
-          {["All", "Unread", "Groups", "AI"].map((f) => (
+        <div className="filters" aria-label="Conversation filters">
+          {["All", "Unread", "Groups"].map((f) => (
             <button
-              role="tab"
-              aria-selected={filter === f}
+              aria-pressed={filter === f}
               key={f}
               onClick={() => setFilter(f)}
             >
               {f}
             </button>
           ))}
+          <button
+            className="filter-ai"
+            aria-label="Open Relay AI"
+            title="Open Relay AI"
+            onClick={() => void openAI().catch((e) => setError(e.message))}
+          >
+            AI <ArrowUpRight size={13} />
+          </button>
         </div>
         <div className="conversation-list">
           {conversations.isPending &&

@@ -36,8 +36,10 @@ import {
   createSpeaker,
   speechSupported,
   speakGreeting,
+  checkVoicePermissions,
 } from "@/lib/voice";
 import { VoiceLive, type VoiceState } from "./voice-live";
+import { VoicePermissionsDialog } from "./voice-permissions-dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -141,6 +143,11 @@ export function Chat({
   } | null>(null);
   // Voice: dictation into the composer, or a hands-free AI conversation ("voice mode").
   const [voice, setVoice] = useState<VoiceState>("off");
+  const [permissionDialog, setPermissionDialog] = useState(false);
+  const [permissionsGranted, setPermissionsGranted] = useState(false);
+  const pendingVoiceAction = useRef<"live" | "dictate" | null>(null);
+  const voiceRef = useRef<VoiceState>("off");
+  voiceRef.current = voice;
   const [heard, setHeard] = useState("");
   const [caption, setCaption] = useState("");
   const [speakingId, setSpeakingId] = useState<string | null>(null);
@@ -160,6 +167,15 @@ export function Chat({
       if (!voiceOn.current || held.current) return;
       if (finalText) void voiceTurn(finalText);
       else recognition.start(); // heard nothing: keep listening
+    },
+    onUserSpeaking: () => {
+      if (
+        voiceOn.current &&
+        !held.current &&
+        (voiceRef.current === "speaking" || voiceRef.current === "thinking")
+      ) {
+        interruptSpeech();
+      }
     },
     onError: (code) => {
       if (code === "no-speech" || code === "aborted") return;
@@ -348,7 +364,15 @@ export function Chat({
       (delta) => {
         out.push(delta);
         setCaption((old) => old + delta);
-        setVoice((v) => (v === "thinking" ? "speaking" : v));
+        setVoice((v) => {
+          if (v === "thinking") {
+            if (voiceOn.current && !held.current && !recognition.listening) {
+              recognition.start();
+            }
+            return "speaking";
+          }
+          return v;
+        });
       },
     );
     if (interrupted.current) {
@@ -363,6 +387,9 @@ export function Chat({
       return endVoice(); // the error is already shown
     }
     setVoice("speaking");
+    if (voiceOn.current && !held.current && !recognition.listening) {
+      recognition.start();
+    }
     await out.finish();
     if (speaker.current === out) speaker.current = null;
     if (voiceOn.current && !held.current) listen();
@@ -373,6 +400,34 @@ export function Chat({
     recognition.start();
   }
   async function startVoice() {
+    if (!aiConfigured) {
+      setError("Set AI_API_KEY on the server to enable Relay AI.");
+      return;
+    }
+    if (!permissionsGranted) {
+      const perm = await checkVoicePermissions();
+      if (!perm.allGranted) {
+        pendingVoiceAction.current = "live";
+        setPermissionDialog(true);
+        return;
+      }
+      setPermissionsGranted(true);
+    }
+    await executeStartVoice();
+  }
+
+  function handlePermissionGranted() {
+    setPermissionsGranted(true);
+    if (pendingVoiceAction.current === "live") {
+      void executeStartVoice();
+    } else if (pendingVoiceAction.current === "dictate") {
+      dictationBase.current = body;
+      recognition.start();
+    }
+    pendingVoiceAction.current = null;
+  }
+
+  async function executeStartVoice() {
     if (!aiConfigured) {
       setError("Set AI_API_KEY on the server to enable Relay AI.");
       return;
@@ -388,6 +443,7 @@ export function Chat({
     setCaption(greeting);
     setVoice("speaking");
     // The in-app browser has no speechSynthesis, so play server-generated audio.
+    listen();
     await speakGreeting(greeting);
     if (voiceOn.current && !held.current) listen();
   }
@@ -424,11 +480,21 @@ export function Chat({
     silence();
     if (voiceOn.current && !held.current && stream === null) listen();
   }
-  function toggleDictation() {
+  async function toggleDictation() {
     if (recognition.listening) return recognition.stop();
+    if (!permissionsGranted) {
+      const perm = await checkVoicePermissions();
+      if (!perm.allGranted) {
+        pendingVoiceAction.current = "dictate";
+        setPermissionDialog(true);
+        return;
+      }
+      setPermissionsGranted(true);
+    }
     dictationBase.current = body;
     recognition.start();
   }
+
   async function readAloud(m: Message) {
     if (speakingId === m.id) {
       cancelSpeech();
@@ -1290,6 +1356,11 @@ export function Chat({
         onResume={resumeVoice}
         onInterrupt={interruptSpeech}
         onEnd={endVoice}
+      />
+      <VoicePermissionsDialog
+        open={permissionDialog}
+        onOpenChange={setPermissionDialog}
+        onGranted={handlePermissionGranted}
       />
       <Dialog
         open={!!reactionTarget}

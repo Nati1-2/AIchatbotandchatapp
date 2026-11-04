@@ -2,31 +2,290 @@
 import { useEffect, useRef, useState } from "react";
 import { cancelAISpeech, speakAI, transcribeAI } from "./api";
 
-/** Records locally, detects a pause, then asks the configured Gemini backend to transcribe. */
+declare global {
+  interface Window {
+    SpeechRecognition?: any;
+    webkitSpeechRecognition?: any;
+    webkitAudioContext?: any;
+  }
+}
+
+export interface PermissionCheckResult {
+  microphone: "granted" | "denied" | "prompt" | "unsupported";
+  audioPlayback: "granted" | "denied" | "unsupported";
+  allGranted: boolean;
+}
+
+/** Check whether required permissions are currently granted. */
+export async function checkVoicePermissions(): Promise<PermissionCheckResult> {
+  if (typeof window === "undefined" || !navigator?.mediaDevices?.getUserMedia) {
+    return {
+      microphone: "unsupported",
+      audioPlayback: "unsupported",
+      allGranted: false,
+    };
+  }
+
+  let micState: "granted" | "denied" | "prompt" | "unsupported" = "prompt";
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      const status = await navigator.permissions.query({
+        name: "microphone" as PermissionName,
+      });
+      micState = status.state;
+    }
+  } catch {
+    // Some browsers (like Safari) don't support permissions.query for microphone
+    micState = "prompt";
+  }
+
+  return {
+    microphone: micState,
+    audioPlayback: typeof AudioContext !== "undefined" ? "granted" : "unsupported",
+    allGranted: micState === "granted",
+  };
+}
+
+/**
+ * Mandatory permission prompt and verification for Voice AI talks.
+ * Requests microphone permission and unlocks AudioContext for real-time simultaneous audio.
+ */
+export async function requestMandatoryPermissions(): Promise<{
+  success: boolean;
+  error?: string;
+  code?: "not-allowed" | "not-found" | "unsupported" | "unknown";
+}> {
+  if (typeof window === "undefined" || !navigator?.mediaDevices?.getUserMedia) {
+    return {
+      success: false,
+      code: "unsupported",
+      error: "Your browser does not support audio capture. Please use a modern browser like Chrome, Edge, or Safari.",
+    };
+  }
+
+  try {
+    // 1. Explicitly request microphone stream with hardware echo cancellation
+    const media = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    // Successfully granted! Close the test tracks immediately so we don't hold the mic unnecessarily.
+    media.getTracks().forEach((track) => track.stop());
+
+    // 2. Unlock and verify AudioContext playback permissions
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const testCtx = new AudioCtx();
+        if (testCtx.state === "suspended") {
+          await testCtx.resume();
+        }
+        await testCtx.close();
+      }
+    } catch {
+      // AudioContext fallback
+    }
+
+    return { success: true };
+  } catch (error) {
+    const err = error as DOMException;
+    if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+      return {
+        success: false,
+        code: "not-allowed",
+        error: "Microphone permission was denied. Please allow microphone access in your browser to talk with Relay AI.",
+      };
+    }
+    if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+      return {
+        success: false,
+        code: "not-found",
+        error: "No microphone was found on your device. Please connect an audio input device and try again.",
+      };
+    }
+    return {
+      success: false,
+      code: "unknown",
+      error: err.message || "Could not acquire microphone permission.",
+    };
+  }
+}
+
+export function isSpeechRecognitionSupported(): boolean {
+  if (typeof window === "undefined") return false;
+  return !!(
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition ||
+    (navigator.mediaDevices?.getUserMedia && "MediaRecorder" in window)
+  );
+}
+
+/**
+ * Real-time simultaneous speech recognition hook.
+ * Uses native Web Speech API (interim results in real-time) when available,
+ * with continuous duplex and voice interruption (barge-in) support,
+ * and falls back gracefully to AudioContext + MediaRecorder + server transcription.
+ */
 export function useSpeechRecognition(handlers: {
-  onResult: (text: string) => void;
+  onResult: (text: string, isFinal?: boolean) => void;
   onEnd?: (finalText: string) => void;
   onError?: (code: string) => void;
+  onUserSpeaking?: () => void;
 }) {
   const h = useRef(handlers);
   h.current = handlers;
+
+  const nativeRec = useRef<any>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const context = useRef<AudioContext | null>(null);
   const frame = useRef(0);
   const cancelled = useRef(false);
+  const silenceTimer = useRef<any>(null);
+  const accumulatedFinal = useRef("");
   const [supported, setSupported] = useState(false);
   const [listening, setListening] = useState(false);
+
   useEffect(() => {
-    setSupported(!!navigator.mediaDevices?.getUserMedia && "MediaRecorder" in window);
+    setSupported(isSpeechRecognitionSupported());
     return () => abort();
   }, []);
+
   async function start() {
     abort();
     cancelled.current = false;
+    accumulatedFinal.current = "";
+
+    const SpeechRec =
+      typeof window !== "undefined" &&
+      (window.SpeechRecognition || window.webkitSpeechRecognition);
+
+    // Prefer native Web Speech API for zero-latency, real-time interim recognition
+    if (SpeechRec) {
+      try {
+        const rec = new SpeechRec();
+        nativeRec.current = rec;
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.maxAlternatives = 1;
+        rec.lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+
+        let currentTurnText = "";
+
+        rec.onstart = () => {
+          if (cancelled.current) {
+            rec.stop();
+            return;
+          }
+          setListening(true);
+        };
+
+        rec.onspeechstart = () => {
+          // Notify that user started speaking (triggers natural interruption / barge-in)
+          h.current.onUserSpeaking?.();
+          if (silenceTimer.current) {
+            clearTimeout(silenceTimer.current);
+            silenceTimer.current = null;
+          }
+        };
+
+        rec.onresult = (event: any) => {
+          if (cancelled.current) return;
+          h.current.onUserSpeaking?.();
+
+          let interim = "";
+          let finalPiece = "";
+
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            const result = event.results[i];
+            const transcript = result[0]?.transcript || "";
+            if (result.isFinal) {
+              finalPiece += transcript;
+            } else {
+              interim += transcript;
+            }
+          }
+
+          if (finalPiece) {
+            accumulatedFinal.current = (
+              accumulatedFinal.current +
+              " " +
+              finalPiece
+            ).trim();
+          }
+
+          currentTurnText = (
+            accumulatedFinal.current +
+            " " +
+            interim
+          ).trim();
+
+          if (currentTurnText) {
+            h.current.onResult(currentTurnText, false);
+          }
+
+          // Natural conversational pause detection (850ms of silence after speaking)
+          if (silenceTimer.current) clearTimeout(silenceTimer.current);
+          if (currentTurnText) {
+            silenceTimer.current = setTimeout(() => {
+              if (cancelled.current) return;
+              const completed = currentTurnText;
+              accumulatedFinal.current = "";
+              h.current.onResult(completed, true);
+              h.current.onEnd?.(completed);
+            }, 850);
+          }
+        };
+
+        rec.onerror = (event: any) => {
+          if (cancelled.current) return;
+          const error = event.error;
+          if (error === "no-speech") return;
+          if (error === "aborted") return;
+          if (error === "not-allowed" || error === "service-not-allowed") {
+            setListening(false);
+            h.current.onError?.("not-allowed");
+          } else {
+            // For other speech engine errors, fallback to media recorder if possible
+            startFallbackRecorder();
+          }
+        };
+
+        rec.onend = () => {
+          if (cancelled.current) {
+            setListening(false);
+            return;
+          }
+          // Restart continuous listening if not intentionally stopped
+          try {
+            rec.start();
+          } catch {
+            setListening(false);
+          }
+        };
+
+        rec.start();
+        return;
+      } catch {
+        // Fall back to MediaRecorder
+      }
+    }
+
+    startFallbackRecorder();
+  }
+
+  async function startFallbackRecorder() {
     try {
       const media = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
       if (cancelled.current) return media.getTracks().forEach((track) => track.stop());
       stream.current = media;
@@ -44,18 +303,19 @@ export function useSpeechRecognition(handlers: {
         setListening(false);
         if (cancelled.current) return;
         try {
-          h.current.onResult("Transcribing…");
+          h.current.onResult("Transcribing…", false);
           const text = await transcribeAI(new Blob(chunks, { type: r.mimeType }));
-          h.current.onResult(text);
+          h.current.onResult(text, true);
           h.current.onEnd?.(text);
         } catch (error) {
           h.current.onError?.((error as Error).message || "transcription-failed");
         }
       };
-      r.start(250);
+      r.start(200);
       setListening(true);
 
-      const audio = new AudioContext();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const audio = new AudioCtx();
       context.current = audio;
       const analyser = audio.createAnalyser();
       analyser.fftSize = 256;
@@ -67,11 +327,18 @@ export function useSpeechRecognition(handlers: {
         analyser.getByteTimeDomainData(samples);
         let sum = 0;
         for (const value of samples) sum += ((value - 128) / 128) ** 2;
-        const loud = Math.sqrt(sum / samples.length) > 0.025;
+        const rms = Math.sqrt(sum / samples.length);
+        const loud = rms > 0.025;
         const now = performance.now();
-        if (loud) speechAt = now;
-        if ((speechAt && now - speechAt > 1200) || now - started > 15000) r.stop();
-        else frame.current = requestAnimationFrame(watch);
+        if (loud) {
+          speechAt = now;
+          h.current.onUserSpeaking?.();
+        }
+        if ((speechAt && now - speechAt > 850) || now - started > 15000) {
+          r.stop();
+        } else {
+          frame.current = requestAnimationFrame(watch);
+        }
       };
       watch();
     } catch (error) {
@@ -81,10 +348,42 @@ export function useSpeechRecognition(handlers: {
       );
     }
   }
+
+  function stop() {
+    if (silenceTimer.current) {
+      clearTimeout(silenceTimer.current);
+      silenceTimer.current = null;
+    }
+    if (nativeRec.current) {
+      try {
+        nativeRec.current.stop();
+      } catch {}
+      nativeRec.current = null;
+    }
+    if (recorder.current?.state !== "inactive") {
+      recorder.current?.stop();
+    }
+    setListening(false);
+  }
+
   function abort() {
     cancelled.current = true;
+    if (silenceTimer.current) {
+      clearTimeout(silenceTimer.current);
+      silenceTimer.current = null;
+    }
     cancelAnimationFrame(frame.current);
-    if (recorder.current?.state !== "inactive") recorder.current?.stop();
+    if (nativeRec.current) {
+      try {
+        nativeRec.current.abort();
+      } catch {}
+      nativeRec.current = null;
+    }
+    if (recorder.current?.state !== "inactive") {
+      try {
+        recorder.current?.stop();
+      } catch {}
+    }
     stream.current?.getTracks().forEach((track) => track.stop());
     stream.current = null;
     void context.current?.close();
@@ -92,11 +391,12 @@ export function useSpeechRecognition(handlers: {
     recorder.current = null;
     setListening(false);
   }
+
   return {
     supported,
     listening,
     start,
-    stop: () => recorder.current?.state !== "inactive" && recorder.current?.stop(),
+    stop,
     abort,
   };
 }
@@ -129,7 +429,7 @@ export function speakLocal(markdown: string): Promise<void> {
     const text = speakable(markdown);
     if (!text) return resolve();
     window.speechSynthesis.cancel();
-    const lang = navigator.language || "en-US";
+    const lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
     const utterance = new SpeechSynthesisUtterance(text);
     const voice = bestVoice(lang);
     utterance.lang = voice?.lang || lang;
@@ -161,6 +461,7 @@ export async function speakGreeting(markdown: string): Promise<void> {
 
 // Prefer natural/neural voices (e.g. "Google US English", "Microsoft Aria Online (Natural)").
 function bestVoice(lang: string) {
+  if (!speechSupported()) return null;
   const voices = window.speechSynthesis.getVoices();
   const base = lang.split("-")[0];
   const matching = voices.filter((v) => v.lang.replace("_", "-").startsWith(base));
@@ -191,9 +492,11 @@ export function createSpeaker(onLevel?: (speaking: boolean) => void) {
   let remote = Promise.resolve();
   const finished = new Promise<void>((resolve) => (done = resolve));
   const lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+
   function settle() {
     if (cancelled || (closed && pending === 0)) done();
   }
+
   function say(markdown: string) {
     if (cancelled) return;
     const chunks = sentences(speakable(markdown));
@@ -225,6 +528,7 @@ export function createSpeaker(onLevel?: (speaking: boolean) => void) {
         });
     }
   }
+
   return {
     push(text: string) {
       buffer += text;
@@ -278,11 +582,18 @@ export function useMicLevel(active: boolean) {
     let stream: MediaStream | null = null;
     let ctx: AudioContext | null = null;
     void navigator.mediaDevices
-      .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+      .getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
       .then((s) => {
         if (stopped) return s.getTracks().forEach((t) => t.stop());
         stream = s;
-        ctx = new AudioContext();
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        ctx = new AudioCtx();
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
         ctx.createMediaStreamSource(s).connect(analyser);

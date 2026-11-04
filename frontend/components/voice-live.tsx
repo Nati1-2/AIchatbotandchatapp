@@ -1,12 +1,12 @@
 "use client";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Mic, MicOff, Sparkles, Volume2, X } from "lucide-react";
+import { Mic, MicOff, Sparkles, Volume2, X, Radio } from "lucide-react";
 import { speakable } from "@/lib/voice";
 
 export type VoiceState = "off" | "listening" | "thinking" | "speaking" | "held";
 
-/** Full-screen hands-free conversation, in the spirit of Gemini Live. */
+/** Full-screen hands-free real-time simultaneous voice conversation. */
 export function VoiceLive({
   state,
   heard,
@@ -30,6 +30,7 @@ export function VoiceLive({
   const onEndRef = useRef(onEnd);
   onEndRef.current = onEnd;
   const open = state !== "off";
+
   useEffect(() => {
     if (!open) return;
     end.current?.focus();
@@ -37,40 +38,46 @@ export function VoiceLive({
     document.addEventListener("keydown", key);
     return () => document.removeEventListener("keydown", key);
   }, [open]);
+
   if (!open || typeof document === "undefined") return null;
+
   // Show the tail of the spoken reply, like live captions.
   const spoken = speakable(caption);
   const tail = spoken.length > 260 ? "…" + spoken.slice(-260) : spoken;
+
   const status =
     state === "listening"
-      ? "Listening"
+      ? "Listening in Real Time"
       : state === "thinking"
         ? "Thinking"
         : state === "speaking"
           ? "Speaking"
-          : "Microphone muted";
+          : "Microphone Muted";
+
   const statusDetail =
     state === "listening"
-      ? "Speak naturally — I’ll answer when you pause"
+      ? "Speak naturally — streaming live simultaneous speech"
       : state === "thinking"
-        ? "Putting together a response"
+        ? "Putting together a real-time response"
         : state === "speaking"
-          ? "Tap the wave to jump in"
-          : "Tap unmute when you’re ready to speak";
+          ? "Simultaneous duplex active — speak anytime or tap the orb to interrupt"
+          : "Tap unmute when you’re ready to talk";
+
   return createPortal(
     <div
       className={`live live-${state}`}
       role="dialog"
       aria-modal="true"
-      aria-label="Voice conversation with Relay AI"
+      aria-label="Real-time voice conversation with Relay AI"
       style={{ "--level": level } as React.CSSProperties}
     >
       <header className="live-top">
         <span className="live-badge">
           <Sparkles size={15} />
-          Relay Live
+          Relay Live · Real-Time Simultaneous
         </span>
       </header>
+
       <div
         className="live-captions"
         aria-live="polite"
@@ -78,7 +85,7 @@ export function VoiceLive({
       >
         {state === "listening" && (
           <p className={heard ? "live-user" : "live-hint"}>
-            {heard || "Go ahead, I’m listening"}
+            {heard || "Go ahead, I’m listening in real time…"}
           </p>
         )}
         {state === "thinking" && (
@@ -91,17 +98,28 @@ export function VoiceLive({
             </span>
           </>
         )}
-        {state === "speaking" && <p className="live-ai">{tail || "…"}</p>}
+        {state === "speaking" && (
+          <>
+            <p className="live-ai">{tail || "…"}</p>
+            <div className="live-duplex-pill">
+              <Radio size={12} className="live-pulse" />
+              <span>Simultaneous Duplex: You can speak over to interrupt naturally</span>
+            </div>
+          </>
+        )}
         {state === "held" && (
           <p className="live-hint">Your microphone is muted.</p>
         )}
       </div>
+
       <div className="live-visual-wrap">
         <button
           type="button"
           className="live-orb"
           aria-label={
-            state === "speaking" ? "Interrupt and talk" : `Relay AI: ${status}`
+            state === "speaking"
+              ? "Interrupt and talk"
+              : `Relay AI: ${status}`
           }
           onClick={state === "speaking" ? onInterrupt : undefined}
           tabIndex={state === "speaking" ? 0 : -1}
@@ -129,6 +147,7 @@ export function VoiceLive({
           <span>{statusDetail}</span>
         </div>
       </div>
+
       <footer className="live-controls">
         <span className="live-control">
           <button

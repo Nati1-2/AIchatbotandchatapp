@@ -1,3 +1,4 @@
+import os, re
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -6,7 +7,11 @@ ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=ROOT_ENV, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=ROOT_ENV,
+        extra="ignore",
+        env_ignore_empty=True,
+    )
     environment: str = "production"
     database_url: str = "postgresql+asyncpg://relay:relay@localhost:5432/relay"
     redis_url: str = "redis://localhost:6379/0"
@@ -19,7 +24,11 @@ class Settings(BaseSettings):
     s3_bucket: str = "relay-private"
     max_upload_bytes: int = 10 * 1024 * 1024
     ai_api_key: str = ""
-    ai_demo_mode: bool = True
+    gemini_api_key: str = ""
+    google_api_key: str = ""
+    postgres: str = ""
+    rediskey: str = ""
+    ai_demo_mode: bool = False
     ai_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     ai_model: str = "gemini-2.5-flash"
     ai_tts_model: str = "gemini-2.5-flash-preview-tts"
@@ -28,16 +37,42 @@ class Settings(BaseSettings):
     ai_context_chars: int = 24000
 
     def model_post_init(self, __context):
-        if self.database_url.startswith("postgres://"):
-            self.database_url = self.database_url.replace(
-                "postgres://", "postgresql+asyncpg://", 1
-            )
-        elif self.database_url.startswith("postgresql://") and not self.database_url.startswith(
-            "postgresql+asyncpg://"
-        ):
-            self.database_url = self.database_url.replace(
-                "postgresql://", "postgresql+asyncpg://", 1
-            )
+        # Resolve AI API key from AI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY
+        resolved_key = (
+            self.ai_api_key
+            or self.gemini_api_key
+            or self.google_api_key
+            or os.environ.get("AI_API_KEY", "")
+            or os.environ.get("GEMINI_API_KEY", "")
+            or os.environ.get("GOOGLE_API_KEY", "")
+        )
+        self.ai_api_key = resolved_key.strip()
+
+        # If a real API key is configured, disable demo mode automatically
+        if self.ai_api_key:
+            self.ai_demo_mode = False
+
+        # Resolve database URL from DATABASE_URL or postgres
+        db = (
+            self.database_url
+            if self.database_url != "postgresql+asyncpg://relay:relay@localhost:5432/relay"
+            else (self.postgres or os.environ.get("POSTGRES", "") or self.database_url)
+        )
+        # Strip asyncpg-unsupported query parameters like channel_binding
+        db = re.sub(r"[?&]channel_binding=[^&]*", "", db)
+        if "?" not in db and "&" in db:
+            db = db.replace("&", "?", 1)
+
+        if db.startswith("postgres://"):
+            db = db.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif db.startswith("postgresql://") and not db.startswith("postgresql+asyncpg://"):
+            db = db.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+        self.database_url = db
+
+        # Resolve Redis URL from REDIS_URL or rediskey
+        if self.rediskey and (not self.redis_url or self.redis_url == "redis://localhost:6379/0"):
+            self.redis_url = self.rediskey
 
         if self.frontend_origin:
             self.frontend_origin = self.frontend_origin.rstrip("/")

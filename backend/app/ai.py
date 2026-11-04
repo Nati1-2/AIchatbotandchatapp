@@ -58,7 +58,7 @@ class Provider:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "contents": [{"parts": [{"text": "Say naturally and warmly: " + text}]}],
+                    "contents": [{"parts": [{"text": text}]}],
                     "generationConfig": {
                         "responseModalities": ["AUDIO"],
                         "speechConfig": {
@@ -100,13 +100,16 @@ class Provider:
         async with httpx.AsyncClient(timeout=settings.ai_timeout_seconds) as client:
             response = await client.post(
                 base + f"/models/{settings.ai_model}:generateContent",
-                headers={"x-goog-api-key": settings.ai_api_key},
+                headers={
+                    "x-goog-api-key": settings.ai_api_key,
+                    "Content-Type": "application/json",
+                },
                 json={
                     "contents": [{
                         "role": "user",
                         "parts": [
                             {"text": "Transcribe this speech exactly. Return only the spoken words. If there is no intelligible speech, return an empty response."},
-                            {"inline_data": {"mime_type": mime_type.split(";")[0], "data": audio}},
+                            {"inlineData": {"mimeType": mime_type.split(";")[0], "data": audio}},
                         ],
                     }],
                     "generationConfig": {"temperature": 0},

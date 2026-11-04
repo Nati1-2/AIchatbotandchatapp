@@ -395,12 +395,19 @@ async def generate(
                         generation.tokens = usage
                         generation.latency_ms = round((time.monotonic() - start) * 1000)
                         await save.commit()
-                await r.eval(
-                    "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) end; return 0",
-                    1,
-                    lock,
-                    lock_token,
-                )
+                try:
+                    await r.eval(
+                        "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) end; return 0",
+                        1,
+                        lock,
+                        lock_token,
+                    )
+                except Exception:
+                    try:
+                        if await r.get(lock) == lock_token:
+                            await r.delete(lock)
+                    except Exception:
+                        pass
 
             await asyncio.shield(finish())
 

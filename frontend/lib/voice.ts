@@ -16,9 +16,18 @@ export interface PermissionCheckResult {
   allGranted: boolean;
 }
 
+/** Safely checks whether mediaDevices.getUserMedia is available as a function. */
+export function hasGetUserMedia(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getUserMedia === "function"
+  );
+}
+
 /** Check whether required permissions are currently granted. */
 export async function checkVoicePermissions(): Promise<PermissionCheckResult> {
-  if (typeof window === "undefined" || !navigator?.mediaDevices?.getUserMedia) {
+  if (!hasGetUserMedia()) {
     return {
       microphone: "unsupported",
       audioPlayback: "unsupported",
@@ -28,7 +37,11 @@ export async function checkVoicePermissions(): Promise<PermissionCheckResult> {
 
   let micState: "granted" | "denied" | "prompt" | "unsupported" = "prompt";
   try {
-    if (navigator.permissions && navigator.permissions.query) {
+    if (
+      typeof navigator !== "undefined" &&
+      "permissions" in navigator &&
+      typeof navigator.permissions?.query === "function"
+    ) {
       const status = await navigator.permissions.query({
         name: "microphone" as PermissionName,
       });
@@ -55,7 +68,7 @@ export async function requestMandatoryPermissions(): Promise<{
   error?: string;
   code?: "not-allowed" | "not-found" | "unsupported" | "unknown";
 }> {
-  if (typeof window === "undefined" || !navigator?.mediaDevices?.getUserMedia) {
+  if (!hasGetUserMedia()) {
     return {
       success: false,
       code: "unsupported",
@@ -120,7 +133,7 @@ export function isSpeechRecognitionSupported(): boolean {
   return !!(
     window.SpeechRecognition ||
     window.webkitSpeechRecognition ||
-    (navigator.mediaDevices?.getUserMedia && "MediaRecorder" in window)
+    (hasGetUserMedia() && "MediaRecorder" in window)
   );
 }
 
@@ -576,7 +589,7 @@ export function speak(markdown: string): Promise<void> {
 export function useMicLevel(active: boolean) {
   const [level, setLevel] = useState(0);
   useEffect(() => {
-    if (!active || !navigator.mediaDevices?.getUserMedia) return;
+    if (!active || !hasGetUserMedia()) return;
     let stopped = false;
     let frame = 0;
     let stream: MediaStream | null = null;

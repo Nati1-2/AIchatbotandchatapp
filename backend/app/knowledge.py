@@ -59,3 +59,4 @@ def get_relay_system_prompt(is_voice: bool = False) -> str:
             "- Feel free to use neat Markdown, bullet points, and code syntax highlighting when helpful."
         )
     return prompt
+

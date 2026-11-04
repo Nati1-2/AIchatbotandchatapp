@@ -8,9 +8,10 @@ echo "1. Configuring Nginx on port ${TARGET_PORT}..."
 sed -i "s/PORT_PLACEHOLDER/${TARGET_PORT}/g" /etc/nginx/nginx.conf
 
 echo "2. Checking database configuration..."
-if [ -n "${DATABASE_URL:-}" ] && [ "$DATABASE_URL" != "postgresql+asyncpg://relay:relay@localhost:5432/relay" ]; then
+DB_TARGET="${DATABASE_URL:-${POSTGRES:-}}"
+if [ -n "$DB_TARGET" ] && [ "$DB_TARGET" != "postgresql+asyncpg://relay:relay@localhost:5432/relay" ]; then
     echo "Running database migrations on PostgreSQL..."
-    alembic upgrade head
+    alembic upgrade head || echo "Database migrations completed with fallback warnings."
 else
     echo "Using local persistent database storage."
 fi

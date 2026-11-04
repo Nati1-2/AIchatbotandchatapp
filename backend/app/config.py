@@ -6,6 +6,30 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
 
+def clean_postgres_url(url: str) -> str:
+    if not url:
+        return url
+
+    # 1. Convert driver scheme to asyncpg
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    # 2. asyncpg rejects 'sslmode', it expects 'ssl'
+    url = re.sub(r"([?&])sslmode=([^&]*)", r"\1ssl=\2", url)
+
+    # 3. asyncpg rejects 'channel_binding'
+    url = re.sub(r"[?&]channel_binding=[^&]*", "", url)
+
+    # 4. Clean up any broken query string separators
+    if "?" not in url and "&" in url:
+        url = url.replace("&", "?", 1)
+    url = re.sub(r"\?&", "?", url)
+    url = url.rstrip("?&")
+    return url
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=ROOT_ENV,
@@ -58,17 +82,9 @@ class Settings(BaseSettings):
             if self.database_url != "postgresql+asyncpg://relay:relay@localhost:5432/relay"
             else (self.postgres or os.environ.get("POSTGRES", "") or self.database_url)
         )
-        # Strip asyncpg-unsupported query parameters like channel_binding
-        db = re.sub(r"[?&]channel_binding=[^&]*", "", db)
-        if "?" not in db and "&" in db:
-            db = db.replace("&", "?", 1)
-
-        if db.startswith("postgres://"):
-            db = db.replace("postgres://", "postgresql+asyncpg://", 1)
-        elif db.startswith("postgresql://") and not db.startswith("postgresql+asyncpg://"):
-            db = db.replace("postgresql://", "postgresql+asyncpg://", 1)
-
-        self.database_url = db
+        self.database_url = clean_postgres_url(db)
+        if self.database_url:
+            os.environ["DATABASE_URL"] = self.database_url
 
         # Resolve Redis URL from REDIS_URL or rediskey
         if self.rediskey and (not self.redis_url or self.redis_url == "redis://localhost:6379/0"):

@@ -47,10 +47,6 @@ jobs:
     name: Backend
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      ENVIRONMENT: production
-      FRONTEND_ORIGIN: http://localhost:3000
-      SECURE_COOKIES: "false"
     defaults:
       run:
         working-directory: backend

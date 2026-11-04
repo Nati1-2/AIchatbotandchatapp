@@ -62,33 +62,52 @@ export function mutate<T>(path: string, body: unknown, method = "POST") {
 let speechAudio: HTMLAudioElement | null = null;
 let speechRequest: AbortController | null = null;
 export function cancelAISpeech() {
-  speechRequest?.abort();
-  speechRequest = null;
-  speechAudio?.pause();
-  speechAudio = null;
+  if (speechRequest) {
+    speechRequest.abort();
+    speechRequest = null;
+  }
+  if (speechAudio) {
+    speechAudio.pause();
+    speechAudio.currentTime = 0;
+    speechAudio = null;
+  }
 }
 export async function speakAI(text: string) {
-  speechRequest = new AbortController();
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const controller = new AbortController();
+  speechRequest = controller;
   const baseUrl = getApi();
   const response = await fetch(baseUrl + "/ai/speech", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
-    body: JSON.stringify({ text }),
-    signal: speechRequest.signal,
+    body: JSON.stringify({ text: trimmed }),
+    signal: controller.signal,
   });
   if (!response.ok) throw new Error("Relay could not generate speech.");
-  const url = URL.createObjectURL(await response.blob());
+  const blob = await response.blob();
+  if (controller.signal.aborted) return;
+  const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   speechAudio = audio;
   await new Promise<void>((resolve, reject) => {
     audio.onended = () => resolve();
     audio.onerror = () => reject(new Error("Speech playback failed."));
+    if (controller.signal.aborted) {
+      audio.pause();
+      resolve();
+      return;
+    }
+    controller.signal.addEventListener("abort", () => {
+      audio.pause();
+      resolve();
+    }, { once: true });
     void audio.play().catch(reject);
   }).finally(() => {
     URL.revokeObjectURL(url);
     if (speechAudio === audio) speechAudio = null;
-    speechRequest = null;
+    if (speechRequest === controller) speechRequest = null;
   });
 }
 export async function transcribeAI(blob: Blob) {

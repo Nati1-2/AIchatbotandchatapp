@@ -30,7 +30,6 @@ import {
 } from "lucide-react";
 import {
   useSpeechRecognition,
-  useMicLevel,
   speak,
   cancelSpeech,
   createSpeaker,
@@ -151,11 +150,11 @@ export function Chat({
   const [heard, setHeard] = useState("");
   const [caption, setCaption] = useState("");
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [aiSpeakingLevel, setAiSpeakingLevel] = useState(0);
   const voiceOn = useRef(false);
   const held = useRef(false);
   const interrupted = useRef(false);
   const speaker = useRef<ReturnType<typeof createSpeaker> | null>(null);
-  const micLevel = useMicLevel(voice === "listening");
   const dictationBase = useRef("");
   const streamed = useRef("");
   const recognition = useSpeechRecognition({
@@ -165,8 +164,11 @@ export function Chat({
     },
     onEnd: (finalText) => {
       if (!voiceOn.current || held.current) return;
-      if (finalText) void voiceTurn(finalText);
-      else recognition.start(); // heard nothing: keep listening
+      if (finalText && finalText.trim()) {
+        void voiceTurn(finalText.trim());
+      } else {
+        listen();
+      }
     },
     onUserSpeaking: () => {
       if (
@@ -355,42 +357,41 @@ export function Chat({
   }
   // Voice mode: listen → send on pause → speak the reply as it streams → listen again.
   async function voiceTurn(text: string) {
+    recognition.stop();
     setVoice("thinking");
     setCaption("");
-    const out = createSpeaker();
+    const out = createSpeaker((speaking, lvl) => {
+      setAiSpeakingLevel(speaking ? (lvl ?? 0.6) : 0);
+    });
     speaker.current = out;
     const answer = await askAI(
       { body: text, client_id: crypto.randomUUID(), voice: true },
       (delta) => {
         out.push(delta);
         setCaption((old) => old + delta);
-        setVoice((v) => {
-          if (v === "thinking") {
-            if (voiceOn.current && !held.current && !recognition.listening) {
-              recognition.start();
-            }
-            return "speaking";
-          }
-          return v;
-        });
+        setVoice((v) => (v === "thinking" ? "speaking" : v));
       },
     );
     if (interrupted.current) {
       interrupted.current = false;
       out.cancel();
+      setAiSpeakingLevel(0);
       if (voiceOn.current && !held.current) listen();
       return;
     }
-    if (!voiceOn.current || held.current) return out.cancel();
+    if (!voiceOn.current || held.current) {
+      out.cancel();
+      setAiSpeakingLevel(0);
+      return;
+    }
     if (!answer) {
       out.cancel();
+      setAiSpeakingLevel(0);
       return endVoice(); // the error is already shown
     }
     setVoice("speaking");
-    if (voiceOn.current && !held.current && !recognition.listening) {
-      recognition.start();
-    }
     await out.finish();
+    setAiSpeakingLevel(0);
     if (speaker.current === out) speaker.current = null;
     if (voiceOn.current && !held.current) listen();
   }
@@ -442,13 +443,14 @@ export function Chat({
     const greeting = "Hi, I’m Relay. What would you like to talk about?";
     setCaption(greeting);
     setVoice("speaking");
-    // The in-app browser has no speechSynthesis, so play server-generated audio.
-    listen();
+    setAiSpeakingLevel(0.6);
     await speakGreeting(greeting);
+    setAiSpeakingLevel(0);
     if (voiceOn.current && !held.current) listen();
   }
   // Silences the reply and stops generating it, so the next turn isn't blocked.
   function silence() {
+    setAiSpeakingLevel(0);
     speaker.current?.cancel();
     speaker.current = null;
     if (stream !== null) {
@@ -457,6 +459,7 @@ export function Chat({
     }
   }
   function endVoice() {
+    setAiSpeakingLevel(0);
     voiceOn.current = false;
     held.current = false;
     recognition.abort();
@@ -1351,7 +1354,13 @@ export function Chat({
         state={voice}
         heard={heard}
         caption={caption}
-        level={micLevel}
+        level={
+          voice === "speaking"
+            ? aiSpeakingLevel
+            : voice === "listening"
+              ? recognition.level
+              : 0
+        }
         onHold={holdVoice}
         onResume={resumeVoice}
         onInterrupt={interruptSpeech}

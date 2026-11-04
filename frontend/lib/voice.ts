@@ -72,7 +72,8 @@ export async function requestMandatoryPermissions(): Promise<{
     return {
       success: false,
       code: "unsupported",
-      error: "Your browser does not support audio capture. Please use a modern browser like Chrome, Edge, or Safari.",
+      error:
+        "Your browser does not support audio capture. Please use a modern browser like Chrome, Edge, or Safari.",
     };
   }
 
@@ -110,14 +111,16 @@ export async function requestMandatoryPermissions(): Promise<{
       return {
         success: false,
         code: "not-allowed",
-        error: "Microphone permission was denied. Please allow microphone access in your browser to talk with Relay AI.",
+        error:
+          "Microphone permission was denied. Please allow microphone access in your browser to talk with Relay AI.",
       };
     }
     if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
       return {
         success: false,
         code: "not-found",
-        error: "No microphone was found on your device. Please connect an audio input device and try again.",
+        error:
+          "No microphone was found on your device. Please connect an audio input device and try again.",
       };
     }
     return {
@@ -140,8 +143,8 @@ export function isSpeechRecognitionSupported(): boolean {
 /**
  * Real-time simultaneous speech recognition hook.
  * Uses native Web Speech API (interim results in real-time) when available,
- * with continuous duplex and voice interruption (barge-in) support,
- * and falls back gracefully to AudioContext + MediaRecorder + server transcription.
+ * with continuous duplex, mic level monitoring, and voice interruption (barge-in) support,
+ * and falls back gracefully to AudioContext + MediaRecorder + Gemini server transcription.
  */
 export function useSpeechRecognition(handlers: {
   onResult: (text: string, isFinal?: boolean) => void;
@@ -156,12 +159,18 @@ export function useSpeechRecognition(handlers: {
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const context = useRef<AudioContext | null>(null);
+  const analyserNode = useRef<AnalyserNode | null>(null);
   const frame = useRef(0);
   const cancelled = useRef(false);
   const silenceTimer = useRef<any>(null);
   const accumulatedFinal = useRef("");
+  const isFallback = useRef(false);
+  const isUserSpeaking = useRef(false);
+  const chunksRef = useRef<Blob[]>([]);
+
   const [supported, setSupported] = useState(false);
   const [listening, setListening] = useState(false);
+  const [level, setLevel] = useState(0);
 
   useEffect(() => {
     setSupported(isSpeechRecognitionSupported());
@@ -172,13 +181,95 @@ export function useSpeechRecognition(handlers: {
     abort();
     cancelled.current = false;
     accumulatedFinal.current = "";
+    isUserSpeaking.current = false;
 
+    // 1. Acquire MediaStream for microphone loudness monitoring and fallback recording
+    let audioStream: MediaStream | null = null;
+    if (hasGetUserMedia()) {
+      try {
+        audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        if (cancelled.current) {
+          audioStream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        stream.current = audioStream;
+
+        // Set up AudioContext and AnalyserNode for live level and VAD
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          if (ctx.state === "suspended") {
+            void ctx.resume();
+          }
+          context.current = ctx;
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          analyserNode.current = analyser;
+          const source = ctx.createMediaStreamSource(audioStream);
+          source.connect(analyser);
+
+          const samples = new Uint8Array(analyser.fftSize);
+          let smooth = 0;
+          let lastSpeechTime = 0;
+
+          const tick = () => {
+            if (cancelled.current || !analyserNode.current) return;
+            analyser.getByteTimeDomainData(samples);
+            let sum = 0;
+            for (let i = 0; i < samples.length; i++) {
+              sum += ((samples[i] - 128) / 128) ** 2;
+            }
+            const rms = Math.min(1, Math.sqrt(sum / samples.length) * 5);
+            smooth = smooth * 0.7 + rms * 0.3;
+            setLevel(Math.round(smooth * 100) / 100);
+
+            // VAD check: voice detected!
+            if (rms > 0.035) {
+              lastSpeechTime = performance.now();
+              if (!isUserSpeaking.current) {
+                isUserSpeaking.current = true;
+                h.current.onUserSpeaking?.();
+              }
+            }
+
+            // In fallback mode (MediaRecorder): detect end of speech
+            if (isFallback.current && isUserSpeaking.current) {
+              if (lastSpeechTime > 0 && performance.now() - lastSpeechTime > 800) {
+                isUserSpeaking.current = false;
+                lastSpeechTime = 0;
+                if (recorder.current && recorder.current.state === "recording") {
+                  try {
+                    recorder.current.stop();
+                  } catch {}
+                }
+              }
+            }
+
+            frame.current = requestAnimationFrame(tick);
+          };
+          frame.current = requestAnimationFrame(tick);
+        }
+      } catch (err) {
+        const domErr = err as DOMException;
+        if (domErr.name === "NotAllowedError" || domErr.name === "PermissionDeniedError") {
+          h.current.onError?.("not-allowed");
+          return;
+        }
+      }
+    }
+
+    // 2. Primary recognition engine: Web Speech API
     const SpeechRec =
       typeof window !== "undefined" &&
       (window.SpeechRecognition || window.webkitSpeechRecognition);
 
-    // Prefer native Web Speech API for zero-latency, real-time interim recognition
-    if (SpeechRec) {
+    if (SpeechRec && !isFallback.current) {
       try {
         const rec = new SpeechRec();
         nativeRec.current = rec;
@@ -191,14 +282,15 @@ export function useSpeechRecognition(handlers: {
 
         rec.onstart = () => {
           if (cancelled.current) {
-            rec.stop();
+            try {
+              rec.stop();
+            } catch {}
             return;
           }
           setListening(true);
         };
 
         rec.onspeechstart = () => {
-          // Notify that user started speaking (triggers natural interruption / barge-in)
           h.current.onUserSpeaking?.();
           if (silenceTimer.current) {
             clearTimeout(silenceTimer.current);
@@ -241,124 +333,113 @@ export function useSpeechRecognition(handlers: {
             h.current.onResult(currentTurnText, false);
           }
 
-          // Natural conversational pause detection (850ms of silence after speaking)
           if (silenceTimer.current) clearTimeout(silenceTimer.current);
           if (currentTurnText) {
             silenceTimer.current = setTimeout(() => {
               if (cancelled.current) return;
               const completed = currentTurnText;
               accumulatedFinal.current = "";
+              // STOP native recognition turn cleanly so it won't listen to AI turn
+              try {
+                rec.stop();
+              } catch {}
+              setListening(false);
               h.current.onResult(completed, true);
               h.current.onEnd?.(completed);
-            }, 850);
+            }, 750);
           }
         };
 
         rec.onerror = (event: any) => {
           if (cancelled.current) return;
           const error = event.error;
-          if (error === "no-speech") return;
-          if (error === "aborted") return;
+          if (error === "no-speech" || error === "aborted") return;
           if (error === "not-allowed" || error === "service-not-allowed") {
             setListening(false);
             h.current.onError?.("not-allowed");
           } else {
-            // For other speech engine errors, fallback to media recorder if possible
-            startFallbackRecorder();
+            // Network or audio capture error on Web Speech -> fallback to MediaRecorder + Gemini
+            isFallback.current = true;
+            try {
+              rec.abort();
+            } catch {}
+            nativeRec.current = null;
+            startMediaRecorderFallback(audioStream);
           }
         };
 
         rec.onend = () => {
-          if (cancelled.current) {
+          if (cancelled.current || !listening) {
             setListening(false);
             return;
           }
-          // Restart continuous listening if not intentionally stopped
-          try {
-            rec.start();
-          } catch {
-            setListening(false);
-          }
         };
 
-        rec.start();
+        try {
+          rec.start();
+        } catch {
+          // If start fails (already started or blocked)
+          isFallback.current = true;
+          startMediaRecorderFallback(audioStream);
+        }
         return;
       } catch {
-        // Fall back to MediaRecorder
+        isFallback.current = true;
       }
     }
 
-    startFallbackRecorder();
+    // 3. Fallback engine: MediaRecorder + Gemini Transcribe
+    startMediaRecorderFallback(audioStream);
   }
 
-  async function startFallbackRecorder() {
+  function startMediaRecorderFallback(audioStream: MediaStream | null) {
+    if (cancelled.current) return;
+    if (!audioStream) {
+      h.current.onError?.("microphone-failed");
+      return;
+    }
+    chunksRef.current = [];
     try {
-      const media = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      if (cancelled.current) return media.getTracks().forEach((track) => track.stop());
-      stream.current = media;
-      const chunks: Blob[] = [];
-      const r = new MediaRecorder(media);
-      recorder.current = r;
-      r.ondataavailable = (event) => event.data.size && chunks.push(event.data);
-      r.onstop = async () => {
-        cancelAnimationFrame(frame.current);
-        media.getTracks().forEach((track) => track.stop());
-        stream.current = null;
-        void context.current?.close();
-        context.current = null;
-        recorder.current = null;
-        setListening(false);
+      const rec = new MediaRecorder(audioStream);
+      recorder.current = rec;
+      rec.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          chunksRef.current.push(e.data);
+        }
+      };
+      rec.onstop = async () => {
         if (cancelled.current) return;
+        const blob = new Blob(chunksRef.current, {
+          type: rec.mimeType || "audio/webm",
+        });
+        chunksRef.current = [];
+        if (blob.size < 1000) {
+          if (!cancelled.current) {
+            startMediaRecorderFallback(audioStream);
+          }
+          return;
+        }
         try {
-          h.current.onResult("Transcribing…", false);
-          const text = await transcribeAI(new Blob(chunks, { type: r.mimeType }));
-          h.current.onResult(text, true);
-          h.current.onEnd?.(text);
-        } catch (error) {
-          h.current.onError?.((error as Error).message || "transcription-failed");
+          h.current.onResult("Transcribing with Gemini…", false);
+          const text = await transcribeAI(blob);
+          if (text && text.trim()) {
+            h.current.onResult(text.trim(), true);
+            h.current.onEnd?.(text.trim());
+          } else {
+            if (!cancelled.current) {
+              startMediaRecorderFallback(audioStream);
+            }
+          }
+        } catch {
+          if (!cancelled.current) {
+            startMediaRecorderFallback(audioStream);
+          }
         }
       };
-      r.start(200);
+      rec.start(150);
       setListening(true);
-
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const audio = new AudioCtx();
-      context.current = audio;
-      const analyser = audio.createAnalyser();
-      analyser.fftSize = 256;
-      audio.createMediaStreamSource(media).connect(analyser);
-      const samples = new Uint8Array(analyser.fftSize);
-      const started = performance.now();
-      let speechAt = 0;
-      const watch = () => {
-        analyser.getByteTimeDomainData(samples);
-        let sum = 0;
-        for (const value of samples) sum += ((value - 128) / 128) ** 2;
-        const rms = Math.sqrt(sum / samples.length);
-        const loud = rms > 0.025;
-        const now = performance.now();
-        if (loud) {
-          speechAt = now;
-          h.current.onUserSpeaking?.();
-        }
-        if ((speechAt && now - speechAt > 850) || now - started > 15000) {
-          r.stop();
-        } else {
-          frame.current = requestAnimationFrame(watch);
-        }
-      };
-      watch();
-    } catch (error) {
-      setListening(false);
-      h.current.onError?.(
-        (error as DOMException).name === "NotAllowedError" ? "not-allowed" : "microphone-failed",
-      );
+    } catch {
+      h.current.onError?.("microphone-failed");
     }
   }
 
@@ -373,8 +454,11 @@ export function useSpeechRecognition(handlers: {
       } catch {}
       nativeRec.current = null;
     }
-    if (recorder.current?.state !== "inactive") {
-      recorder.current?.stop();
+    if (recorder.current && recorder.current.state !== "inactive") {
+      try {
+        recorder.current.stop();
+      } catch {}
+      recorder.current = null;
     }
     setListening(false);
   }
@@ -392,22 +476,30 @@ export function useSpeechRecognition(handlers: {
       } catch {}
       nativeRec.current = null;
     }
-    if (recorder.current?.state !== "inactive") {
+    if (recorder.current && recorder.current.state !== "inactive") {
       try {
-        recorder.current?.stop();
+        recorder.current.stop();
       } catch {}
+      recorder.current = null;
     }
-    stream.current?.getTracks().forEach((track) => track.stop());
-    stream.current = null;
-    void context.current?.close();
-    context.current = null;
-    recorder.current = null;
+    if (stream.current) {
+      stream.current.getTracks().forEach((track) => track.stop());
+      stream.current = null;
+    }
+    if (context.current) {
+      void context.current.close().catch(() => {});
+      context.current = null;
+    }
+    analyserNode.current = null;
+    chunksRef.current = [];
+    setLevel(0);
     setListening(false);
   }
 
   return {
     supported,
     listening,
+    level,
     start,
     stop,
     abort,
@@ -430,7 +522,14 @@ export function speechSupported() {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
+let activeGreetingAudio: HTMLAudioElement | null = null;
+
 export function cancelSpeech() {
+  if (activeGreetingAudio) {
+    activeGreetingAudio.pause();
+    activeGreetingAudio.currentTime = 0;
+    activeGreetingAudio = null;
+  }
   if (speechSupported()) window.speechSynthesis.cancel();
   cancelAISpeech();
 }
@@ -458,6 +557,7 @@ export async function speakGreeting(markdown: string): Promise<void> {
   cancelSpeech();
   try {
     const audio = new Audio("/relay-greeting.wav");
+    activeGreetingAudio = audio;
     await audio.play();
     await new Promise<void>((resolve, reject) => {
       audio.onended = () => resolve();
@@ -468,6 +568,10 @@ export async function speakGreeting(markdown: string): Promise<void> {
       await speakAI(speakable(markdown));
     } catch {
       await speakLocal(markdown);
+    }
+  } finally {
+    if (activeGreetingAudio) {
+      activeGreetingAudio = null;
     }
   }
 }
@@ -496,18 +600,45 @@ export function sentences(text: string) {
  * Speaks text as it streams in: each complete sentence is queued as soon as it arrives,
  * so a reply starts playing before generation finishes. Code fences are never split.
  */
-export function createSpeaker(onLevel?: (speaking: boolean) => void) {
+export function createSpeaker(
+  onLevel?: (speaking: boolean, level?: number) => void,
+) {
   let buffer = "";
   let pending = 0;
   let closed = false;
   let cancelled = false;
   let done: () => void = () => {};
   let remote = Promise.resolve();
+  let pulseTimer: any = null;
   const finished = new Promise<void>((resolve) => (done = resolve));
   const lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
 
+  function startPulse() {
+    if (pulseTimer) return;
+    pulseTimer = setInterval(() => {
+      if (cancelled || pending === 0) {
+        clearInterval(pulseTimer);
+        pulseTimer = null;
+        onLevel?.(false, 0);
+        return;
+      }
+      onLevel?.(true, 0.35 + Math.random() * 0.45);
+    }, 120);
+  }
+
+  function stopPulse() {
+    if (pulseTimer) {
+      clearInterval(pulseTimer);
+      pulseTimer = null;
+    }
+    onLevel?.(false, 0);
+  }
+
   function settle() {
-    if (cancelled || (closed && pending === 0)) done();
+    if (cancelled || (closed && pending === 0)) {
+      stopPulse();
+      done();
+    }
   }
 
   function say(markdown: string) {
@@ -518,7 +649,7 @@ export function createSpeaker(onLevel?: (speaking: boolean) => void) {
       remote = remote
         .then(async () => {
           if (cancelled) return;
-          onLevel?.(true);
+          startPulse();
           await speakAI(chunk);
         })
         .catch(
@@ -531,12 +662,13 @@ export function createSpeaker(onLevel?: (speaking: boolean) => void) {
               if (voice) u.voice = voice;
               u.rate = 1.05;
               u.onend = u.onerror = () => resolve();
+              startPulse();
               window.speechSynthesis.speak(u);
             }),
         )
         .finally(() => {
           pending--;
-          if (pending === 0) onLevel?.(false);
+          if (pending === 0) stopPulse();
           settle();
         });
     }
@@ -567,8 +699,8 @@ export function createSpeaker(onLevel?: (speaking: boolean) => void) {
     cancel() {
       cancelled = true;
       buffer = "";
+      stopPulse();
       cancelSpeech();
-      onLevel?.(false);
       done();
     },
   };

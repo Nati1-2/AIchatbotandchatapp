@@ -83,12 +83,18 @@ class Provider:
         if not audio:
             raise ValueError("The speech provider returned no audio.")
         raw = base64.b64decode(audio)
-        if mime_type.startswith("audio/L16"):
+        if mime_type.startswith("audio/L16") or "pcm" in mime_type.lower():
             output = io.BytesIO()
             with wave.open(output, "wb") as wav:
                 wav.setnchannels(1)
                 wav.setsampwidth(2)
-                wav.setframerate(24000)
+                rate = 24000
+                if "rate=" in mime_type:
+                    try:
+                        rate = int(mime_type.split("rate=")[1].split(";")[0])
+                    except Exception:
+                        pass
+                wav.setframerate(rate)
                 wav.writeframes(raw)
             return output.getvalue()
         return raw

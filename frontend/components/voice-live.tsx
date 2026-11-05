@@ -15,6 +15,8 @@ export function VoiceLive({
   onHold,
   onResume,
   onInterrupt,
+  volume,
+  onVolumeChange,
   onEnd,
 }: {
   state: VoiceState;
@@ -24,6 +26,8 @@ export function VoiceLive({
   onHold: () => void;
   onResume: () => void;
   onInterrupt: () => void;
+  volume: number;
+  onVolumeChange: (volume: number) => void;
   onEnd: () => void;
 }) {
   const end = useRef<HTMLButtonElement>(null);
@@ -159,6 +163,19 @@ export function VoiceLive({
           </button>
           {state === "held" ? "Unmute" : "Mute"}
         </span>
+        <label className="live-control live-volume">
+          <span className="live-volume-icon"><Volume2 size={22} /></span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            value={Math.round(volume * 100)}
+            aria-label="Assistant volume"
+            onChange={(event) => onVolumeChange(Number(event.target.value) / 100)}
+          />
+          <span>{Math.round(volume * 100)}%</span>
+        </label>
         <span className="live-control">
           <button
             ref={end}

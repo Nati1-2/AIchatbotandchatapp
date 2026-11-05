@@ -153,6 +153,11 @@ export function Chat({
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [aiSpeakingLevel, setAiSpeakingLevel] = useState(0);
   const [liveMicLevel, setLiveMicLevel] = useState(0);
+  const [liveVolume, setLiveVolume] = useState(() => {
+    if (typeof window === "undefined") return 0.8;
+    const saved = Number(window.localStorage.getItem("relay_live_volume"));
+    return Number.isFinite(saved) && saved >= 0 && saved <= 1 ? saved : 0.8;
+  });
   const voiceOn = useRef(false);
   const liveVoice = useRef<GeminiLiveVoice | null>(null);
   const held = useRef(false);
@@ -478,6 +483,7 @@ export function Chat({
       },
     });
     liveVoice.current = live;
+    live.setVolume(liveVolume);
     try {
       await live.start(c.id);
       return;
@@ -1429,6 +1435,12 @@ export function Chat({
         onHold={holdVoice}
         onResume={resumeVoice}
         onInterrupt={interruptSpeech}
+        volume={liveVolume}
+        onVolumeChange={(volume) => {
+          setLiveVolume(volume);
+          liveVoice.current?.setVolume(volume);
+          window.localStorage.setItem("relay_live_volume", String(volume));
+        }}
         onEnd={endVoice}
       />
       <VoicePermissionsDialog

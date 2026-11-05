@@ -43,6 +43,8 @@ export class GeminiLiveVoice {
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
   private sink: GainNode | null = null;
+  private playbackGain: GainNode | null = null;
+  private volume = 0.8;
   private nextPlayback = 0;
   private playbackSources = new Set<AudioBufferSourceNode>();
   private muted = false;
@@ -53,6 +55,9 @@ export class GeminiLiveVoice {
     this.stop();
     this.context = new AudioContext({ latencyHint: "interactive" });
     await this.context.resume();
+    this.playbackGain = this.context.createGain();
+    this.playbackGain.gain.value = this.volume;
+    this.playbackGain.connect(this.context.destination);
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
@@ -106,6 +111,17 @@ export class GeminiLiveVoice {
     }
   }
 
+  setVolume(value: number) {
+    this.volume = Math.max(0, Math.min(1, value));
+    if (this.playbackGain && this.context) {
+      this.playbackGain.gain.setTargetAtTime(
+        this.volume,
+        this.context.currentTime,
+        0.015,
+      );
+    }
+  }
+
   private play(bytes: ArrayBuffer) {
     const context = this.context;
     if (!context) return;
@@ -115,7 +131,7 @@ export class GeminiLiveVoice {
     for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
     const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(this.playbackGain || context.destination);
     const start = Math.max(context.currentTime + 0.02, this.nextPlayback);
     source.start(start);
     this.nextPlayback = start + buffer.duration;
@@ -142,9 +158,11 @@ export class GeminiLiveVoice {
     this.processor?.disconnect();
     this.source?.disconnect();
     this.sink?.disconnect();
+    this.playbackGain?.disconnect();
     this.processor = null;
     this.source = null;
     this.sink = null;
+    this.playbackGain = null;
     for (const track of this.stream?.getTracks() || []) track.stop();
     this.stream = null;
     void this.context?.close().catch(() => {});

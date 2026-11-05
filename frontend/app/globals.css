@@ -2378,6 +2378,23 @@ hr {
 .live-control .live-end:hover {
   background: #d13a40;
 }
+.live-volume {
+  min-width: 150px;
+  justify-content: center;
+}
+.live-volume .live-volume-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #ffffff26;
+}
+.live-volume input[type="range"] {
+  width: 150px;
+  accent-color: #8ab4f8;
+  cursor: pointer;
+}
 @keyframes live-in {
   from {
     opacity: 0;
@@ -2437,7 +2454,13 @@ hr {
     font-size: 14px;
   }
   .live-controls {
-    gap: 32px;
+    gap: 22px;
+  }
+  .live-volume {
+    min-width: 110px;
+  }
+  .live-volume input[type="range"] {
+    width: 110px;
   }
   .live-orb {
     height: 126px;

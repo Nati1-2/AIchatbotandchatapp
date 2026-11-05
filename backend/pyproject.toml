@@ -16,6 +16,7 @@ dependencies = [
     "python-multipart>=0.0.20,<1",
     "boto3>=1.36,<2",
     "httpx>=0.28,<1",
+    "websockets>=15,<18",
     "pillow>=11,<13"
 ]
 [dependency-groups]

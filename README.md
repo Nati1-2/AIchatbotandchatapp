@@ -3,9 +3,9 @@
 **Private messaging and natural AI voice conversations in one focused workspace.**
 
 Relay combines a real-time messenger with Relay Live, a hands-free Gemini voice
-experience. Start Live and Relay greets you aloud, listens until you pause,
-streams an answer, speaks it with Gemini TTS, and returns to listening for the
-next turn.
+experience. Start Live and Relay opens a persistent Gemini Live session that
+streams microphone and response audio simultaneously, including natural
+barge-in while the assistant is speaking.
 
 ![Relay Live speaking with an animated waveform](docs/screenshots/ai-voice-live.png)
 
@@ -17,10 +17,10 @@ Relay Live is built as a continuous conversation rather than a voice button
 attached to a text box.
 
 - **AI speaks first.** Relay opens with a friendly spoken greeting.
-- **Hands-free turns.** Speech recognition sends a turn after the user pauses.
-- **Streaming responses.** Text arrives from Gemini as it is generated.
-- **Natural audio.** The server converts replies to Gemini-generated WAV audio,
-  so voice works even when browser speech synthesis is unavailable.
+- **Full-duplex audio.** Microphone PCM and Gemini audio flow continuously over
+  one authenticated WebSocket session.
+- **Streaming responses.** Native 24 kHz speech arrives and plays immediately.
+- **Natural interruption.** Speaking over Relay cancels queued response audio.
 - **Responsive waveform.** Microphone volume drives the listening visualization;
   animated waves show thinking and speaking states.
 - **Interruptible.** Tap the waveform while Relay is speaking to jump in.
@@ -28,8 +28,9 @@ attached to a text box.
 - **Private context.** The AI receives only the current Relay AI conversation.
   API keys remain on the server.
 
-The text model uses Gemini's OpenAI-compatible chat-completions endpoint. Spoken
-audio uses Gemini's native TTS interactions endpoint with the Kore voice.
+Text chat uses Gemini's OpenAI-compatible endpoint. Relay Live uses Gemini Live
+with the Kore voice; the existing transcription and TTS endpoints remain as a
+fallback when real-time audio cannot initialize.
 
 ## Real conversations between people
 

@@ -44,6 +44,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { api, mutate, upload, streamAI, API } from "@/lib/api";
 import { mergeMessages } from "@/lib/messages";
+import { GeminiLiveVoice } from "@/lib/live-voice";
 import type { Conversation, History, Message, User } from "@/lib/types";
 import { Button } from "./ui/button";
 import { Dialog } from "./ui/dialog";
@@ -151,7 +152,9 @@ export function Chat({
   const [caption, setCaption] = useState("");
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [aiSpeakingLevel, setAiSpeakingLevel] = useState(0);
+  const [liveMicLevel, setLiveMicLevel] = useState(0);
   const voiceOn = useRef(false);
+  const liveVoice = useRef<GeminiLiveVoice | null>(null);
   const held = useRef(false);
   const interrupted = useRef(false);
   const speaker = useRef<ReturnType<typeof createSpeaker> | null>(null);
@@ -187,6 +190,8 @@ export function Chat({
           ? "Microphone access is blocked. Allow it in your browser to use voice."
           : code === "microphone-failed"
             ? "Could not start the microphone. Please try again."
+            : code === "transcription-failed"
+              ? "Relay could not transcribe the recording. Check the Gemini API key and try again."
             : code,
       );
     },
@@ -440,6 +445,48 @@ export function Chat({
     setError("");
     voiceOn.current = true;
     held.current = false;
+    setCaption("");
+    setHeard("");
+    setVoice("thinking");
+    const live = new GeminiLiveVoice({
+      onReady: () => setVoice("listening"),
+      onListening: (text) => {
+        setHeard(text);
+        setVoice("listening");
+      },
+      onSpeaking: (text) => {
+        if (text) setCaption((old) => old + text);
+        setAiSpeakingLevel(0.65);
+        setVoice("speaking");
+      },
+      onInterrupted: () => {
+        setCaption("");
+        setVoice("listening");
+      },
+      onTurnComplete: () => {
+        setAiSpeakingLevel(0);
+        if (voiceOn.current && !held.current) setVoice("listening");
+      },
+      onLevel: setLiveMicLevel,
+      onError: (message) => {
+        if (!voiceOn.current) return;
+        liveVoice.current?.stop();
+        liveVoice.current = null;
+        voiceOn.current = false;
+        setVoice("off");
+        setError(message + " Turn-based voice is still available after retrying.");
+      },
+    });
+    liveVoice.current = live;
+    try {
+      await live.start(c.id);
+      return;
+    } catch {
+      live.stop();
+      liveVoice.current = null;
+      // Fall through to the established turn-based voice path when a browser
+      // cannot initialize real-time PCM capture.
+    }
     const greeting = "Hi, I’m Relay. What would you like to talk about?";
     setCaption(greeting);
     setVoice("speaking");
@@ -462,24 +509,42 @@ export function Chat({
     setAiSpeakingLevel(0);
     voiceOn.current = false;
     held.current = false;
+    liveVoice.current?.stop();
+    liveVoice.current = null;
     recognition.abort();
     silence();
     cancelSpeech();
     setVoice("off");
     setHeard("");
     setCaption("");
+    setLiveMicLevel(0);
   }
   function holdVoice() {
     held.current = true;
+    if (liveVoice.current) {
+      liveVoice.current.setMuted(true);
+      setVoice("held");
+      return;
+    }
     recognition.abort();
     silence();
     setVoice("held");
   }
   function resumeVoice() {
     held.current = false;
+    if (liveVoice.current) {
+      liveVoice.current.setMuted(false);
+      setVoice("listening");
+      return;
+    }
     listen();
   }
   function interruptSpeech() {
+    if (liveVoice.current) {
+      liveVoice.current.clearPlayback();
+      setVoice("listening");
+      return;
+    }
     silence();
     if (voiceOn.current && !held.current && stream === null) listen();
   }
@@ -1358,7 +1423,7 @@ export function Chat({
           voice === "speaking"
             ? aiSpeakingLevel
             : voice === "listening"
-              ? recognition.level
+              ? (liveVoice.current ? liveMicLevel : recognition.level)
               : 0
         }
         onHold={holdVoice}

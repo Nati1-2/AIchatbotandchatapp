@@ -25,6 +25,11 @@ built-in demo assistant. Set it to a Gemini API key to enable model-generated
 answers, transcription, and server-generated speech. Set `AI_DEMO_MODE=false`
 to disable the fallback entirely.
 
+Full-duplex voice uses `AI_LIVE_MODEL=gemini-3.8-live` by default. The public
+proxy must forward WebSocket upgrades for `/ai/live/*`; the bundled Nginx and
+Render configuration already do this. The Gemini project must have Live API
+quota in addition to ordinary text-model quota.
+
 After deployment, verify `https://YOUR-SERVICE.onrender.com/health`, then sign in
 with `alex` / `Relay-demo-2026!` or `jordan` / `Relay-demo-2026!`.
 

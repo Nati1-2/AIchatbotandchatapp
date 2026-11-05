@@ -1,4 +1,4 @@
-import asyncio, base64, io, json, time, wave
+import asyncio, base64, io, json, logging, time, wave
 from datetime import timedelta
 from uuid import uuid4
 import httpx
@@ -14,6 +14,7 @@ from .events import limit, publish, r
 from .knowledge import get_relay_system_prompt
 
 router = APIRouter()
+log = logging.getLogger("relay.ai")
 
 
 class Provider:
@@ -201,7 +202,8 @@ async def generate_speech(data: SpeechInput, user=Depends(current_user)):
     await limit("ai:speech:" + user.id, 60, 60)
     try:
         audio = await provider.speech(data.text)
-    except Exception:
+    except Exception as exc:
+        log.exception("Gemini speech generation failed: %s", exc)
         raise HTTPException(502, "Relay could not generate speech.")
     return Response(content=audio, media_type="audio/wav")
 
@@ -216,7 +218,8 @@ async def transcribe_speech(data: TranscriptionInput, user=Depends(current_user)
         if len(data.audio) > 8_000_000:
             raise ValueError("Recording is too large")
         text = await provider.transcribe(data.audio, data.mime_type)
-    except Exception:
+    except Exception as exc:
+        log.exception("Gemini transcription failed: %s", exc)
         raise HTTPException(502, "Relay could not understand that recording.")
     return {"text": text}
 
@@ -378,7 +381,8 @@ async def generate(
         except asyncio.CancelledError:
             status = "cancelled"
             raise
-        except Exception:
+        except Exception as exc:
+            log.exception("Gemini chat generation failed: %s", exc)
             yield sse(
                 "error",
                 {

@@ -831,6 +831,8 @@ async def websocket(ws: WebSocket):
 
 from .attachments import router as attachment_router
 from .ai import router as ai_router
+from .live import router as live_router
 
 app.include_router(attachment_router)
 app.include_router(ai_router)
+app.include_router(live_router)

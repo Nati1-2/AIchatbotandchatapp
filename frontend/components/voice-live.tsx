@@ -6,7 +6,7 @@ import { speakable } from "@/lib/voice";
 
 export type VoiceState = "off" | "listening" | "thinking" | "speaking" | "held";
 
-/** Full-screen hands-free real-time simultaneous voice conversation. */
+/** Full-screen hands-free full-duplex voice conversation. */
 export function VoiceLive({
   state,
   heard,
@@ -56,11 +56,11 @@ export function VoiceLive({
 
   const statusDetail =
     state === "listening"
-      ? "Speak naturally — streaming live simultaneous speech"
+      ? "Speak naturally — Gemini is listening continuously"
       : state === "thinking"
         ? "Putting together a real-time response"
         : state === "speaking"
-          ? "Simultaneous duplex active — speak anytime or tap the orb to interrupt"
+          ? "Full duplex is active — speak anytime to interrupt"
           : "Tap unmute when you’re ready to talk";
 
   return createPortal(
@@ -74,7 +74,7 @@ export function VoiceLive({
       <header className="live-top">
         <span className="live-badge">
           <Sparkles size={15} />
-          Relay Live · Real-Time Simultaneous
+          Relay Live · Real-Time Full Duplex
         </span>
       </header>
 
@@ -103,7 +103,7 @@ export function VoiceLive({
             <p className="live-ai">{tail || "…"}</p>
             <div className="live-duplex-pill">
               <Radio size={12} className="live-pulse" />
-              <span>Simultaneous Duplex: You can speak over to interrupt naturally</span>
+              <span>Speak naturally to interrupt at any time</span>
             </div>
           </>
         )}

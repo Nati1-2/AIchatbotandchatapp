@@ -163,6 +163,7 @@ export function useSpeechRecognition(handlers: {
   const frame = useRef(0);
   const cancelled = useRef(false);
   const silenceTimer = useRef<any>(null);
+  const fallbackTimer = useRef<any>(null);
   const accumulatedFinal = useRef("");
   const isFallback = useRef(false);
   const isUserSpeaking = useRef(false);
@@ -182,6 +183,7 @@ export function useSpeechRecognition(handlers: {
     cancelled.current = false;
     accumulatedFinal.current = "";
     isUserSpeaking.current = false;
+    isFallback.current = false;
 
     // 1. Acquire MediaStream for microphone loudness monitoring and fallback recording
     let audioStream: MediaStream | null = null;
@@ -400,7 +402,22 @@ export function useSpeechRecognition(handlers: {
     }
     chunksRef.current = [];
     try {
-      const rec = new MediaRecorder(audioStream);
+      // Safari/iOS commonly records AAC in MP4 while Chromium uses Opus/WebM.
+      // Choose a format the current browser can actually produce.
+      const preferredTypes = [
+        "audio/webm;codecs=opus",
+        "audio/mp4;codecs=mp4a.40.2",
+        "audio/mp4",
+        "audio/webm",
+      ];
+      const mimeType = preferredTypes.find(
+        (type) =>
+          typeof MediaRecorder.isTypeSupported !== "function" ||
+          MediaRecorder.isTypeSupported(type),
+      );
+      const rec = mimeType
+        ? new MediaRecorder(audioStream, { mimeType })
+        : new MediaRecorder(audioStream);
       recorder.current = rec;
       rec.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
@@ -408,6 +425,10 @@ export function useSpeechRecognition(handlers: {
         }
       };
       rec.onstop = async () => {
+        if (fallbackTimer.current) {
+          clearTimeout(fallbackTimer.current);
+          fallbackTimer.current = null;
+        }
         if (cancelled.current) return;
         const blob = new Blob(chunksRef.current, {
           type: rec.mimeType || "audio/webm",
@@ -431,13 +452,21 @@ export function useSpeechRecognition(handlers: {
             }
           }
         } catch {
-          if (!cancelled.current) {
-            startMediaRecorderFallback(audioStream);
-          }
+          setListening(false);
+          h.current.onError?.("transcription-failed");
         }
       };
       rec.start(150);
       setListening(true);
+      // Mobile AudioContext can remain suspended, preventing VAD from ever
+      // stopping the recorder. A bounded chunk guarantees an upload/reply.
+      fallbackTimer.current = setTimeout(() => {
+        if (!cancelled.current && rec.state === "recording") {
+          try {
+            rec.stop();
+          } catch {}
+        }
+      }, 6000);
     } catch {
       h.current.onError?.("microphone-failed");
     }
@@ -447,6 +476,10 @@ export function useSpeechRecognition(handlers: {
     if (silenceTimer.current) {
       clearTimeout(silenceTimer.current);
       silenceTimer.current = null;
+    }
+    if (fallbackTimer.current) {
+      clearTimeout(fallbackTimer.current);
+      fallbackTimer.current = null;
     }
     if (nativeRec.current) {
       try {
@@ -468,6 +501,10 @@ export function useSpeechRecognition(handlers: {
     if (silenceTimer.current) {
       clearTimeout(silenceTimer.current);
       silenceTimer.current = null;
+    }
+    if (fallbackTimer.current) {
+      clearTimeout(fallbackTimer.current);
+      fallbackTimer.current = null;
     }
     cancelAnimationFrame(frame.current);
     if (nativeRec.current) {

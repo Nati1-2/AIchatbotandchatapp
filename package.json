@@ -1,0 +1,9 @@
+{
+  "name": "relay",
+  "private": true,
+  "scripts": {
+    "dev": "node dev.js",
+    "dev:infra": "./dev.sh --infra",
+    "dev:lite": "./dev.sh --lite"
+  }
+}

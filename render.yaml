@@ -1,0 +1,61 @@
+services:
+  - type: keyvalue
+    name: relay-cache
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: off
+
+  # One public URL serves the Next.js frontend, FastAPI API, and WebSockets.
+  - type: web
+    name: relay
+    runtime: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: relay-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: relay-cache
+          type: keyvalue
+          property: connectionString
+      - key: AI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: AI_LIVE_MODEL
+        value: gemini-3.8-live
+      - key: AI_DEMO_MODE
+        value: "false"
+      - key: ENVIRONMENT
+        value: production
+      - key: SECURE_COOKIES
+        value: "true"
+      # Private file storage: any S3-compatible bucket (Cloudflare R2, AWS S3,
+      # Backblaze B2). Required for attachments; Render prompts for these.
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_BUCKET
+        value: relay-private
+      # Live voice cost controls (per user, UTC day).
+      - key: AI_VOICE_LANGUAGE
+        value: en-US
+      - key: AI_LIVE_DAILY_MINUTES
+        value: "60"
+      - key: AI_LIVE_MAX_SESSION_MINUTES
+        value: "30"
+
+databases:
+  - name: relay-db
+    plan: free
+    databaseName: relay
+    user: relay

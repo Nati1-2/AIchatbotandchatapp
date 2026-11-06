@@ -1,9 +1,10 @@
 "use client";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellOff, Pin, FileText, UserPlus, Trash2 } from "lucide-react";
+import { BellOff, Pin, FileText, UserPlus, Trash2, Crown, LogOut } from "lucide-react";
 import { api, mutate, API } from "@/lib/api";
-import type { Attachment, Conversation, User } from "@/lib/types";
+import type { Attachment, Conversation, Member, User } from "@/lib/types";
+import { useUI } from "@/lib/store";
 import { Button } from "./ui/button";
 import { Dialog } from "./ui/dialog";
 export function Details({
@@ -21,6 +22,33 @@ export function Details({
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
   const [clear, setClear] = useState(false);
+  const [confirm, setConfirm] = useState<
+    { kind: "leave" | "delete" } | { kind: "transfer"; member: Member } | null
+  >(null);
+  const [busy, setBusy] = useState(false);
+  // The person who inherits the group if the owner leaves (admins first).
+  const heir = [...c.members]
+    .filter((m) => m.id !== user.id)
+    .sort((a, b) => Number(a.role !== "admin") - Number(b.role !== "admin") || a.id.localeCompare(b.id))[0];
+  async function leaveOrDelete(kind: "leave" | "delete") {
+    setBusy(true);
+    try {
+      await api(
+        kind === "delete" ? `/conversations/${c.id}` : `/conversations/${c.id}/members/${user.id}`,
+        { method: "DELETE" },
+      );
+      setConfirm(null);
+      onClose();
+      useUI.getState().setActive(null);
+      qc.removeQueries({ queryKey: ["messages", c.id] });
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
+    } catch (e) {
+      setError((e as Error).message);
+      setConfirm(null);
+    } finally {
+      setBusy(false);
+    }
+  }
   const attachments = useQuery({
     queryKey: ["attachments", c.id],
     queryFn: () => api<Attachment[]>(`/conversations/${c.id}/attachments`),
@@ -132,6 +160,19 @@ export function Details({
                       </Button>
                     )}
                   {c.kind === "group" &&
+                    own?.role === "owner" &&
+                    m.role !== "owner" && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Make ${m.display_name} the owner`}
+                        title="Transfer ownership"
+                        onClick={() => setConfirm({ kind: "transfer", member: m })}
+                      >
+                        <Crown size={14} />
+                      </Button>
+                    )}
+                  {c.kind === "group" &&
                     m.role !== "owner" &&
                     (own?.role === "owner" ||
                       (own?.role === "admin" && m.role === "member")) && (
@@ -211,6 +252,20 @@ export function Details({
             )}
           </>
         )}
+        {c.kind === "group" && (
+          <div className="group-actions">
+            <Button variant="outline" onClick={() => setConfirm({ kind: "leave" })}>
+              <LogOut size={16} />
+              Leave group
+            </Button>
+            {own?.role === "owner" && (
+              <Button variant="danger" onClick={() => setConfirm({ kind: "delete" })}>
+                <Trash2 size={16} />
+                Delete group
+              </Button>
+            )}
+          </div>
+        )}
         {c.kind === "ai" && (
           <Button variant="danger" onClick={() => setClear(true)}>
             <Trash2 size={16} />
@@ -222,6 +277,54 @@ export function Details({
             {error}
           </p>
         )}
+      </Dialog>
+      <Dialog
+        open={!!confirm}
+        onOpenChange={(next) => !next && !busy && setConfirm(null)}
+        title={
+          confirm?.kind === "delete"
+            ? `Delete ${c.title}?`
+            : confirm?.kind === "transfer"
+              ? `Make ${confirm.member.display_name} the owner?`
+              : `Leave ${c.title}?`
+        }
+        description={
+          confirm?.kind === "delete"
+            ? "Everyone loses access and all messages and files are permanently deleted. This cannot be undone."
+            : confirm?.kind === "transfer"
+              ? "They’ll control members and settings. You’ll become an admin."
+              : own?.role === "owner"
+                ? heir
+                  ? `You’ll stop receiving messages. ${heir.display_name} becomes the owner.`
+                  : "You’re the last member, so the group will be deleted."
+                : "You’ll stop receiving messages from this group. Someone will need to add you back."
+        }
+      >
+        <div className="dialog-actions">
+          <Button variant="ghost" disabled={busy} onClick={() => setConfirm(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant={confirm?.kind === "transfer" ? "default" : "danger"}
+            disabled={busy}
+            onClick={() => {
+              if (!confirm) return;
+              if (confirm.kind === "transfer") {
+                const target = confirm.member;
+                setConfirm(null);
+                void perform(() => mutate(`/conversations/${c.id}/owner`, { user_id: target.id }));
+              } else {
+                void leaveOrDelete(confirm.kind);
+              }
+            }}
+          >
+            {confirm?.kind === "delete"
+              ? "Delete group"
+              : confirm?.kind === "transfer"
+                ? "Transfer ownership"
+                : "Leave group"}
+          </Button>
+        </div>
       </Dialog>
       <Dialog
         open={clear}

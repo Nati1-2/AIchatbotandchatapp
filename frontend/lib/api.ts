@@ -1,3 +1,4 @@
+import { getVoiceLanguage } from "./languages";
 export function getApi(): string {
   if (typeof window !== "undefined") {
     const saved = localStorage.getItem("relay_api_url");
@@ -120,6 +121,7 @@ export async function transcribeAI(blob: Blob) {
   const result = await mutate<{ text: string }>("/ai/transcribe", {
     audio,
     mime_type: blob.type || "audio/webm",
+    language: getVoiceLanguage(),
   });
   return result.text.trim();
 }

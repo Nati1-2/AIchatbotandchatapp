@@ -57,11 +57,26 @@ export type EventType =
   | "typing.updated"
   | "presence.updated"
   | "conversation.read"
-  | "conversation.updated";
+  | "conversation.updated"
+  | "conversation.removed";
 export type RelayEvent = {
   v: 1;
   event_id: string;
   type: EventType;
   conversation_id: string;
   payload: Record<string, unknown>;
+};
+export type SearchResult = {
+  id: string;
+  seq: number;
+  conversation_id: string;
+  sender_id: string | null;
+  sender_name: string;
+  snippet: string;
+  created_at: string;
+};
+export type SearchPage = {
+  items: SearchResult[];
+  has_more: boolean;
+  next_cursor: number | null;
 };

@@ -14,9 +14,17 @@ import {
   Settings,
   Plus,
   LoaderCircle,
+  Bell,
 } from "lucide-react";
 import { api, mutate, getApi } from "@/lib/api";
-import type { Conversation, RelayEvent, User } from "@/lib/types";
+import type { Conversation, RelayEvent, SearchPage, User } from "@/lib/types";
+import {
+  enableDesktopNotifications,
+  getNotifyPrefs,
+  notificationsSupported,
+  notifyMessage,
+  setNotifyPrefs,
+} from "@/lib/notify";
 import { reconnectDelay } from "@/lib/messages";
 import { useUI } from "@/lib/store";
 import { Brand } from "./auth";
@@ -58,7 +66,7 @@ export function Workspace({
   aiConfigured: boolean;
 }) {
   const qc = useQueryClient();
-  const { active, setActive } = useUI();
+  const { active, setActive, openMessage } = useUI();
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<"new" | "settings" | null>(null);
@@ -101,17 +109,41 @@ export function Workspace({
           return;
         }
         if (!event.event_id || seen.has(event.event_id)) return;
+        if (event.type === "conversation.removed") {
+          seen.add(event.event_id);
+          const gone = qc
+            .getQueryData<Conversation[]>(["conversations"])
+            ?.find((item) => item.id === event.conversation_id);
+          if (useUI.getState().active === event.conversation_id) {
+            useUI.getState().setActive(null);
+            setError(`You no longer have access to ${gone?.title || "that conversation"}.`);
+          }
+          qc.removeQueries({ queryKey: ["messages", event.conversation_id] });
+          void qc.invalidateQueries({ queryKey: ["conversations"] });
+          return;
+        }
         if (
           event.type === "message.created" &&
           event.payload.sender_id &&
-          event.payload.sender_id !== user.id &&
-          useUI.getState().active !== event.conversation_id
+          event.payload.sender_id !== user.id
         ) {
           const conversation = qc
             .getQueryData<Conversation[]>(["conversations"])
             ?.find((item) => item.id === event.conversation_id);
-          if (conversation && !conversation.muted)
-            setNotice({ id: conversation.id, title: conversation.title });
+          const viewing =
+            useUI.getState().active === event.conversation_id &&
+            document.visibilityState === "visible";
+          if (conversation && !conversation.muted && !viewing) {
+            if (useUI.getState().active !== event.conversation_id)
+              setNotice({ id: conversation.id, title: conversation.title });
+            const sender = String(event.payload.sender_name || "New message");
+            notifyMessage({
+              title: conversation.kind === "group" ? `${sender} · ${conversation.title}` : sender,
+              body: String(event.payload.body || "Sent an attachment"),
+              tag: conversation.id,
+              onClick: () => useUI.getState().setActive(conversation.id),
+            });
+          }
         }
         seen.add(event.event_id);
         if (seen.size > 2000) seen.clear();
@@ -171,6 +203,19 @@ export function Workspace({
     const timer = setTimeout(() => setNotice(null), 6000);
     return () => clearTimeout(timer);
   }, [notice]);
+  const [messageQuery, setMessageQuery] = useState("");
+  useEffect(() => {
+    const term = search.trim();
+    const timer = setTimeout(() => setMessageQuery(term.length >= 2 ? term : ""), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+  const messageResults = useQuery({
+    queryKey: ["search", messageQuery],
+    queryFn: () => api<SearchPage>("/search?q=" + encodeURIComponent(messageQuery)),
+    enabled: messageQuery.length >= 2,
+    staleTime: 10_000,
+  });
+  const titles = new Map((conversations.data || []).map((c) => [c.id, c.title]));
   const selected = conversations.data?.find((c) => c.id === active);
   const rows = (conversations.data || [])
     .filter(
@@ -224,8 +269,8 @@ export function Workspace({
         <label className="search-box">
           <Search size={17} />
           <input
-            aria-label="Search conversations"
-            placeholder="Search conversations"
+            aria-label="Search conversations and messages"
+            placeholder="Search chats and messages"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -300,9 +345,41 @@ export function Workspace({
               </span>
             </button>
           ))}
+          {messageQuery && (
+            <section className="search-results" aria-label="Messages matching your search">
+              <h2>Messages</h2>
+              {messageResults.isPending && <div className="skeleton-row" />}
+              {messageResults.isError && (
+                <p className="muted">Message search is unavailable right now.</p>
+              )}
+              {messageResults.data?.items.length === 0 && (
+                <p className="muted">No messages contain “{messageQuery}”.</p>
+              )}
+              {messageResults.data?.items.map((m) => (
+                <button
+                  key={m.id}
+                  className="search-hit"
+                  onClick={() => openMessage(m.conversation_id, m.id)}
+                >
+                  <span className="row-title">
+                    <strong>{titles.get(m.conversation_id) || "Conversation"}</strong>
+                    <time>{new Date(m.created_at).toLocaleDateString()}</time>
+                  </span>
+                  <span className="search-snippet">
+                    <b>{m.sender_id === user.id ? "You" : m.sender_name}:</b>{" "}
+                    <Highlight text={m.snippet} term={messageQuery} />
+                  </span>
+                </button>
+              ))}
+              {messageResults.data?.has_more && (
+                <p className="muted">Showing the 30 most recent matches.</p>
+              )}
+            </section>
+          )}
           {!conversations.isPending &&
             !conversations.isError &&
-            rows.length === 0 && (
+            rows.length === 0 &&
+            !messageQuery && (
               <div className="empty-small">
                 <MessageSquare size={26} />
                 <h3>{search ? "No matches yet" : "A fresh start"}</h3>
@@ -434,6 +511,19 @@ export function Workspace({
       </Dialog>
     </main>
   );
+}
+function Highlight({ text, term }: { text: string; term: string }) {
+  const lower = text.toLowerCase();
+  const needle = term.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let from = 0;
+  for (let at = lower.indexOf(needle); at >= 0 && needle; at = lower.indexOf(needle, from)) {
+    if (at > from) parts.push(text.slice(from, at));
+    parts.push(<mark key={at}>{text.slice(at, at + needle.length)}</mark>);
+    from = at + needle.length;
+  }
+  parts.push(text.slice(from));
+  return <>{parts}</>;
 }
 function NewConversation({
   open,
@@ -584,6 +674,24 @@ function SettingsDialog({
   const [name, setName] = useState(user.display_name);
   const [presence, setPresence] = useState(user.show_presence);
   const [message, setMessage] = useState("");
+  const [prefs, setPrefs] = useState(() =>
+    typeof window === "undefined" ? { desktop: false, sound: true } : getNotifyPrefs(),
+  );
+  function updatePrefs(next: typeof prefs) {
+    setPrefs(next);
+    setNotifyPrefs(next);
+  }
+  async function toggleDesktop(on: boolean) {
+    if (!on) return updatePrefs({ ...prefs, desktop: false });
+    const granted = await enableDesktopNotifications();
+    updatePrefs({ ...prefs, desktop: granted });
+    if (!granted)
+      setMessage(
+        notificationsSupported()
+          ? "Notifications are blocked. Allow them in your browser’s site settings."
+          : "This browser can’t show notifications here (HTTPS is required).",
+      );
+  }
   async function save() {
     try {
       await mutate(
@@ -640,6 +748,32 @@ function SettingsDialog({
       <Button onClick={() => void save()} disabled={!name.trim()}>
         Save changes
       </Button>
+      <hr />
+      <h3 className="settings-heading">
+        <Bell size={16} /> Notifications
+      </h3>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={prefs.desktop}
+          onChange={(e) => void toggleDesktop(e.target.checked)}
+        />
+        <span>
+          Desktop notifications
+          <small>Alerts for new messages while Relay is in the background. Muted chats stay quiet.</small>
+        </span>
+      </label>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={prefs.sound}
+          onChange={(e) => updatePrefs({ ...prefs, sound: e.target.checked })}
+        />
+        <span>
+          Message sound
+          <small>A soft chime when a message arrives in another chat.</small>
+        </span>
+      </label>
       {message && (
         <p role="status" className="muted">
           {message}

@@ -11,7 +11,8 @@ echo "2. Checking database configuration..."
 DB_TARGET="${DATABASE_URL:-${POSTGRES:-}}"
 if [ -n "$DB_TARGET" ] && [ "$DB_TARGET" != "postgresql+asyncpg://relay:relay@localhost:5432/relay" ]; then
     echo "Running database migrations on PostgreSQL..."
-    alembic upgrade head || echo "Database migrations completed with fallback warnings."
+    # Fail fast: serving traffic against an outdated schema causes subtle errors.
+    alembic upgrade head
 else
     echo "Using local persistent database storage."
 fi
@@ -24,8 +25,14 @@ echo "4. Starting Next.js frontend on 127.0.0.1:3000..."
 PORT=3000 HOSTNAME=127.0.0.1 node /app/frontend-dist/server.js &
 FRONTEND_PID=$!
 
+# Validates uploads (pending -> ready), removes abandoned/orphaned files and
+# expired sessions. Without it, shared files never become available.
+echo "4b. Starting background worker..."
+python -m app.worker &
+WORKER_PID=$!
+
 cleanup() {
-    kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
+    kill "$BACKEND_PID" "$FRONTEND_PID" "$WORKER_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 

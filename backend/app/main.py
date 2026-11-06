@@ -15,7 +15,7 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, func, or_, text
+from sqlalchemy import delete, select, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from .config import ai_available, settings
 from .db import database, SessionLocal
@@ -30,6 +30,7 @@ from .security import (
     hasher,
     digest,
     aware,
+    trusted_origin,
     valid_request_origin,
 )
 from .events import r, publish, limit
@@ -78,12 +79,22 @@ async def lifespan(app: FastAPI):
     # in the background made fresh deployments intermittently reject the demo
     # login while the database was still being prepared.
     await init_schema_and_demo()
+    probe = getattr(r, "probe", None)
+    if probe:
+        await probe()
     yield
 
 app = FastAPI(title="Relay API", version="1.0.0", lifespan=lifespan)
+class TrustedCORS(CORSMiddleware):
+    """CORS for the configured frontend (plus local/LAN origins in development)."""
+
+    def is_allowed_origin(self, origin: str) -> bool:
+        return trusted_origin(origin)
+
+
 app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r".*",
+    TrustedCORS,
+    allow_origins=[],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -129,12 +140,35 @@ async def http_error(request, exc):
 async def unexpected_error(request, exc):
     request_id = getattr(request.state, "request_id", "")
     log.error(json.dumps({"request_id": request_id, "error_type": type(exc).__name__}))
+    # Database/Redis unreachable (e.g. Docker not running) → a clear 503.
+    unavailable = isinstance(exc, (OSError, ConnectionError)) or type(exc).__name__ in (
+        "OperationalError",
+        "InterfaceError",
+        "ConnectionError",
+        "TimeoutError",
+    )
+    # Starlette runs this handler outside CORSMiddleware, so without these
+    # headers browsers hide the response and report a generic "NetworkError".
+    headers = {}
+    origin = request.headers.get("origin")
+    if origin and trusted_origin(origin):
+        headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
     return JSONResponse(
-        status_code=500,
+        status_code=503 if unavailable else 500,
+        headers=headers,
         content={
             "error": {
-                "code": 500,
-                "message": "Relay could not complete this request. Please try again.",
+                "code": 503 if unavailable else 500,
+                "message": (
+                    "Relay can't reach its database right now. Make sure the database "
+                    "is running (start Docker, then run npm run dev), then try again."
+                    if unavailable
+                    else "Relay could not complete this request. Please try again."
+                ),
                 "request_id": request_id,
             }
         },
@@ -167,6 +201,8 @@ async def health():
 async def ready(db=Depends(database)):
     await db.execute(text("SELECT 1"))
     await r.ping()
+    if settings.environment == "production" and getattr(r, "using_fallback", False):
+        raise HTTPException(503, "Redis is unreachable; real-time delivery is degraded.")
     return {"status": "ready"}
 
 
@@ -447,6 +483,28 @@ async def remove_member(
     own = await member(db, cid, user.id)
     target = await member(db, cid, uid)
     c = await db.get(Conversation, cid)
+    if c.kind == "group" and target.role == "owner" and uid == user.id:
+        # The owner leaving hands the group to the senior remaining member
+        # (an admin first); the last person leaving deletes the group.
+        others = (
+            await db.scalars(
+                select(Membership).where(
+                    Membership.conversation_id == cid, Membership.user_id != user.id
+                )
+            )
+        ).all()
+        if not others:
+            await _delete_conversation(db, c)
+            await db.commit()
+            await publish(cid, "conversation.removed", {"user_ids": [user.id]})
+            return
+        heir = sorted(others, key=lambda m: (m.role != "admin", m.user_id))[0]
+        heir.role = "owner"
+        await db.delete(target)
+        await db.commit()
+        await publish(cid, "conversation.updated", {})
+        await publish(cid, "conversation.removed", {"user_ids": [user.id]})
+        return
     if (
         c.kind != "group"
         or target.role == "owner"
@@ -461,6 +519,130 @@ async def remove_member(
     await db.delete(target)
     await db.commit()
     await publish(cid, "conversation.updated", {})
+    await publish(cid, "conversation.removed", {"user_ids": [uid]})
+
+
+async def _delete_conversation(db, c):
+    """Delete a conversation and its access rows explicitly (not only via FK cascade)."""
+    await db.execute(delete(Membership).where(Membership.conversation_id == c.id))
+    await db.execute(delete(Preference).where(Preference.conversation_id == c.id))
+    await db.delete(c)
+
+
+@app.post("/conversations/{cid}/owner")
+async def transfer_ownership(
+    cid: str, data: TransferInput, user=Depends(current_user), db=Depends(database)
+):
+    own = await member(db, cid, user.id)
+    c = await db.get(Conversation, cid)
+    if c.kind != "group" or own.role != "owner":
+        raise HTTPException(403, "Only the group owner can transfer ownership.")
+    target = await db.get(Membership, (cid, str(data.user_id)))
+    if not target or target.user_id == user.id:
+        raise HTTPException(404, "Choose another member of this group.")
+    target.role = "owner"
+    own.role = "admin"
+    await db.commit()
+    await publish(cid, "conversation.updated", {})
+    return {"ok": True}
+
+
+@app.delete("/conversations/{cid}", status_code=204)
+async def delete_group(cid: str, user=Depends(current_user), db=Depends(database)):
+    own = await member(db, cid, user.id)
+    c = await db.get(Conversation, cid)
+    if c.kind != "group" or own.role != "owner":
+        raise HTTPException(403, "Only the group owner can delete this group.")
+    user_ids = list(
+        (
+            await db.scalars(
+                select(Membership.user_id).where(Membership.conversation_id == cid)
+            )
+        ).all()
+    )
+    keys = list(
+        (
+            await db.scalars(
+                select(Attachment.storage_key).where(Attachment.conversation_id == cid)
+            )
+        ).all()
+    )
+    await _delete_conversation(db, c)
+    await db.commit()
+    await publish(cid, "conversation.removed", {"user_ids": user_ids})
+    # Stored files are removed by the worker's orphan sweep; try now as well.
+    from .attachments import s3
+
+    for key in keys:
+        try:
+            await asyncio.to_thread(s3().delete_object, Bucket=settings.s3_bucket, Key=key)
+        except Exception:
+            pass
+
+
+def _like_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _snippet(body: str, query: str, width: int = 140) -> str:
+    at = body.lower().find(query.lower())
+    if at < 0 or len(body) <= width:
+        return body[:width]
+    start = max(0, at - width // 3)
+    end = min(len(body), start + width)
+    return ("…" if start else "") + body[start:end] + ("…" if end < len(body) else "")
+
+
+@app.get("/search")
+async def search(
+    q: str = Query(min_length=2, max_length=100),
+    conversation_id: str | None = None,
+    before: int | None = None,
+    user=Depends(current_user),
+    db=Depends(database),
+):
+    """Search every conversation the user belongs to (newest first)."""
+    await limit("search:" + user.id, 60, 60)
+    term = q.strip()
+    if len(term) < 2:
+        raise HTTPException(422, "Type at least two characters.")
+    stmt = (
+        select(Message, User.display_name)
+        .join(
+            Membership,
+            (Membership.conversation_id == Message.conversation_id)
+            & (Membership.user_id == user.id),
+        )
+        .outerjoin(User, User.id == Message.sender_id)
+        .where(
+            Message.deleted == False,  # noqa: E712
+            Message.body.ilike(f"%{_like_escape(term)}%", escape="\\"),
+        )
+        .order_by(Message.seq.desc())
+        .limit(31)
+    )
+    if conversation_id:
+        stmt = stmt.where(Message.conversation_id == conversation_id)
+    if before:
+        stmt = stmt.where(Message.seq < before)
+    rows = (await db.execute(stmt)).all()
+    items = [
+        {
+            "id": m.id,
+            "seq": m.seq,
+            "conversation_id": m.conversation_id,
+            "sender_id": m.sender_id,
+            "sender_name": name or "Relay AI",
+            "snippet": _snippet(m.body, term),
+            "created_at": m.created_at.isoformat(),
+        }
+        for m, name in rows[:30]
+    ]
+    return {
+        "items": items,
+        "has_more": len(rows) > 30,
+        "next_cursor": items[-1]["seq"] if len(rows) > 30 else None,
+    }
 
 
 async def message_out(db, m):
@@ -744,6 +926,11 @@ async def websocket(ws: WebSocket):
                 await ws.close(code=4401)
                 return
             event = json.loads(item["data"])
+            if event.get("type") == "conversation.removed":
+                # Sent to users who just lost access, so it can't be gated on membership.
+                if uid in event.get("payload", {}).get("user_ids", []):
+                    await ws.send_json(event)
+                continue
             async with SessionLocal() as db:
                 if await db.get(Membership, (event["conversation_id"], uid)):
                     await ws.send_json(event)

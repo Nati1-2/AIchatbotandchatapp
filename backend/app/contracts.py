@@ -100,6 +100,7 @@ class Event(BaseModel):
         "presence.updated",
         "conversation.read",
         "conversation.updated",
+        "conversation.removed",
     ]
     conversation_id: str
     payload: dict

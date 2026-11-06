@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { cancelAISpeech, speakAI, transcribeAI } from "./api";
+import { browserSpeechLang } from "./languages";
 
 declare global {
   interface Window {
@@ -23,6 +24,102 @@ export function hasGetUserMedia(): boolean {
     !!navigator.mediaDevices &&
     typeof navigator.mediaDevices.getUserMedia === "function"
   );
+}
+
+export type DeviceInfo = {
+  os: "ios" | "android" | "mac" | "windows" | "linux" | "other";
+  browser: "safari" | "chrome" | "edge" | "firefox" | "samsung" | "other";
+  mobile: boolean;
+  label: string;
+};
+
+/** Best-effort platform/browser detection, used only to tailor help text. */
+export function detectDevice(): DeviceInfo {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  const touchMac = /Macintosh/.test(ua) && typeof navigator !== "undefined" && navigator.maxTouchPoints > 1;
+  const os: DeviceInfo["os"] =
+    /iPhone|iPad|iPod/.test(ua) || touchMac
+      ? "ios"
+      : /Android/.test(ua)
+        ? "android"
+        : /Mac OS X|Macintosh/.test(ua)
+          ? "mac"
+          : /Windows/.test(ua)
+            ? "windows"
+            : /Linux|CrOS/.test(ua)
+              ? "linux"
+              : "other";
+  const browser: DeviceInfo["browser"] = /SamsungBrowser/.test(ua)
+    ? "samsung"
+    : /Edg(A|iOS)?\//.test(ua)
+      ? "edge"
+      : /Firefox|FxiOS/.test(ua)
+        ? "firefox"
+        : /Chrome|CriOS|Chromium/.test(ua)
+          ? "chrome"
+          : /Safari/.test(ua)
+            ? "safari"
+            : "other";
+  const mobile = os === "ios" || os === "android" || /Mobi/.test(ua);
+  const osName = { ios: "iPhone/iPad", android: "Android", mac: "Mac", windows: "Windows", linux: "Linux", other: "this device" }[os];
+  const browserName = { safari: "Safari", chrome: "Chrome", edge: "Edge", firefox: "Firefox", samsung: "Samsung Internet", other: "your browser" }[browser];
+  return { os, browser, mobile, label: `${osName} · ${browserName}` };
+}
+
+/** Step-by-step instructions for re-enabling a blocked microphone. */
+export function microphoneHelpSteps(device: DeviceInfo): string[] {
+  const { os, browser } = device;
+  if (os === "ios") {
+    if (browser === "safari" || browser === "other") {
+      return [
+        "Tap the “aA” (or page menu) button in Safari’s address bar.",
+        "Choose Website Settings and set Microphone to Allow.",
+        "If it’s still blocked, open the Settings app → Apps → Safari → Microphone → Allow.",
+        "Come back and tap Try again.",
+      ];
+    }
+    const app = browser === "chrome" ? "Chrome" : browser === "edge" ? "Edge" : "Firefox";
+    return [
+      `Open the iPhone Settings app and find ${app}.`,
+      "Turn Microphone on.",
+      `Return to ${app}, reload this page, and tap Try again.`,
+    ];
+  }
+  if (os === "android") {
+    if (browser === "samsung") {
+      return [
+        "Tap the menu (☰) → Settings → Sites and downloads → Site permissions → Microphone.",
+        "Allow this site.",
+        "If needed: Android Settings → Apps → Samsung Internet → Permissions → Microphone → Allow.",
+        "Come back and tap Try again.",
+      ];
+    }
+    return [
+      "Tap the settings icon to the left of the address bar.",
+      "Open Permissions and set Microphone to Allow.",
+      "If needed: Android Settings → Apps → your browser → Permissions → Microphone → Allow.",
+      "Come back and tap Try again.",
+    ];
+  }
+  const steps =
+    browser === "firefox"
+      ? [
+          "Click the crossed-out microphone icon in the address bar.",
+          "Remove the “Blocked” permission for this site.",
+        ]
+      : browser === "safari"
+        ? ["In the menu bar choose Safari → Settings for This Website…", "Set Microphone to Allow."]
+        : [
+            "Click the site settings icon at the left of the address bar.",
+            "Set Microphone to Allow, then reload the page if asked.",
+          ];
+  if (os === "mac") {
+    steps.push("Still blocked? System Settings → Privacy & Security → Microphone → enable your browser.");
+  } else if (os === "windows") {
+    steps.push("Still blocked? Windows Settings → Privacy & security → Microphone → allow desktop apps.");
+  }
+  steps.push("Click Try again.");
+  return steps;
 }
 
 /** Check whether required permissions are currently granted. */
@@ -278,7 +375,7 @@ export function useSpeechRecognition(handlers: {
         rec.continuous = true;
         rec.interimResults = true;
         rec.maxAlternatives = 1;
-        rec.lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+        rec.lang = browserSpeechLang();
 
         let currentTurnText = "";
 
@@ -578,7 +675,7 @@ export function speakLocal(markdown: string): Promise<void> {
     const text = speakable(markdown);
     if (!text) return resolve();
     window.speechSynthesis.cancel();
-    const lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+    const lang = browserSpeechLang();
     const utterance = new SpeechSynthesisUtterance(text);
     const voice = bestVoice(lang);
     utterance.lang = voice?.lang || lang;
@@ -648,7 +745,7 @@ export function createSpeaker(
   let remote = Promise.resolve();
   let pulseTimer: any = null;
   const finished = new Promise<void>((resolve) => (done = resolve));
-  const lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+  const lang = browserSpeechLang();
 
   function startPulse() {
     if (pulseTimer) return;

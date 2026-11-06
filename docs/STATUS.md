@@ -10,18 +10,34 @@ Implemented in source:
 - Private image/document uploads, progress, type/size validation, worker processing, authorized downloads, shared file list, image previews, abandoned metadata-backed upload cleanup.
 - Configurable server-only AI adapter, authenticated streaming, private history, stop/retry, content clearing, safe highlighted Markdown, code/message copy, daily quotas, context/output/timeout budgets, usage/latency tracking, reviewed authorized selected-message summaries.
 - Compose services, environment examples, development-only seed, lockfiles, API/browser tests and CI workflow.
+- Relay Live (Gemini Live): full-duplex audio relay with AudioWorklet capture, local barge-in ducking, echo gating, pinned conversation language (15 languages), tuned voice-activity detection, captions, reconnect with Gemini session resumption, history seeding, saved transcripts, per-user daily minutes, session length cap and single active session.
+- Server-wide message search (membership-scoped, wildcard-safe, paginated, pg_trgm index) with jump-to-message.
+- Group lifecycle: ownership transfer, owner leaving hands the group to an admin (or deletes it when last), owner-only group deletion, removal notices to people who lose access.
+- Persistent outbox: unsent messages survive reloads and are resent on reconnect (idempotent on client_id), with retry and discard.
+- Desktop notifications (background tab) and an in-app chime, respecting muted chats.
+- Hourly worker sweep that deletes stored objects with no attachment record.
+- Origin policy: production trusts only FRONTEND_ORIGIN (or same origin); development trusts localhost and private-network addresses only. Error responses carry CORS headers only for trusted origins.
+- Redis: real Redis is always used when reachable; the in-process fallback is only used while it is down (retried every 30 s) and `/ready` reports it in production.
 
 Remaining limitations:
 
-- Docker images and the real Redis/MinIO stack require a running Docker daemon. See the verification record for what was and wasn't exercised here. Browser tests use explicit test service adapters; they are not proof of production Redis/S3 connectivity.
-- No live paid-provider request is made by automated tests. Real AI requires provider configuration and host streaming support.
-- No end-to-end encryption, calls, push notifications, password recovery, MFA, moderation console, or full-text server-side message search. Search in an open conversation covers loaded history only and is labeled accordingly.
-- Mute preferences suppress in-app activity alerts for other conversations. OS push/sound notifications are not implemented; unread badges remain visible.
-- Group ownership transfer and group deletion are not exposed. The owner cannot leave or be removed. Admins cannot promote other admins or remove owners/admins.
-- Emoji insertion has a compact picker; reactions support six emoji in a separate picker. Custom emoji and animated stickers are not included.
-- Presence can lag by up to the 45-second lease plus the 15-second metadata poll. Read means a visible active conversation, not human attention. Mobile viewport behavior has browser coverage but not physical iOS/Android keyboard testing.
-- PDF validation checks signature/type/size, not malware. Objects uploaded immediately before a metadata transaction crash can remain orphaned; production needs periodic bucket reconciliation. Stored metadata-backed abandoned uploads are cleaned automatically.
-- Fan-out has no durable transactional outbox; clients recover through authoritative reads. There is no offline persistent queue across page reloads; failed optimistic messages remain retryable while the current view is mounted.
-- Session/usage cleanup is basic; no administrator usage dashboard or retention UI. Query fan-out and small test datasets have not been load-tested for large groups.
+These need external services, accounts or a larger design and are deliberately not simulated:
 
-These boundaries are deliberate first-version limits, not simulated functionality. See API and deployment documentation for exact contracts.
+| Gap | What it needs |
+| --- | --- |
+| Password recovery | An email provider (SMTP, Postmark, SES…) and verified email addresses on accounts. |
+| MFA | TOTP enrolment/recovery-code UX and a decision on enforcement; no external service needed. |
+| Push notifications to closed apps | VAPID keys, a service worker and a subscription store (Web Push); iOS requires the app installed to the home screen. |
+| Person-to-person voice/video calls | WebRTC signalling plus TURN servers for users behind strict NATs. |
+| End-to-end encryption | A key-management design (e.g. the Signal protocol); incompatible with server-side search and AI over messages. |
+| Malware scanning of uploads | A scanner such as ClamAV as a sidecar service called by the worker. |
+| Moderation and admin dashboard | Roles above group owners, reporting flows and an admin UI. |
+| Durable event outbox | A transactional outbox table relayed to Redis; clients currently recover through authoritative reads. |
+| Load testing | A k6/Locust scenario against a staging stack sized like production. |
+
+Other notes:
+
+- Production file uploads need an S3-compatible bucket (Cloudflare R2, AWS S3, Backblaze B2); `render.yaml` prompts for it.
+- Live voice has been verified against the real Gemini Live API (greeting, language pinning, audio streaming) but not yet with a physical microphone on iOS/Android hardware.
+- Presence can lag by up to the 45-second lease plus the 15-second metadata poll. Read means a visible active conversation, not human attention.
+- PDF validation checks signature/type/size, not malware.

@@ -43,8 +43,10 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { api, mutate, upload, streamAI, API } from "@/lib/api";
-import { mergeMessages } from "@/lib/messages";
-import { GeminiLiveVoice } from "@/lib/live-voice";
+import { loadOutbox, mergeMessages, saveOutbox } from "@/lib/messages";
+import { useUI } from "@/lib/store";
+import { GeminiLiveVoice, unlockAudio } from "@/lib/live-voice";
+import { getVoiceLanguage, setVoiceLanguage, type VoiceLanguage } from "@/lib/languages";
 import type { Conversation, History, Message, User } from "@/lib/types";
 import { Button } from "./ui/button";
 import { Dialog } from "./ui/dialog";
@@ -116,7 +118,11 @@ export function Chat({
 }) {
   const qc = useQueryClient();
   const [body, setBody] = useState("");
-  const [pending, setPending] = useState<Message[]>([]);
+  const [pending, setPending] = useState<Message[]>(() =>
+    typeof window === "undefined" ? [] : loadOutbox(user.id, c.id),
+  );
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
   const [reply, setReply] = useState<Message | null>(null);
   const [edit, setEdit] = useState<Message | null>(null);
   const [error, setError] = useState("");
@@ -153,6 +159,14 @@ export function Chat({
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [aiSpeakingLevel, setAiSpeakingLevel] = useState(0);
   const [liveMicLevel, setLiveMicLevel] = useState(0);
+  const [liveNotice, setLiveNotice] = useState("");
+  const [voiceLanguage, setVoiceLanguageState] = useState<VoiceLanguage>(() =>
+    typeof window === "undefined" ? "en-US" : getVoiceLanguage(),
+  );
+  // Gemini streams transcripts as fragments; these track whether the next
+  // fragment starts a new utterance or continues the current one.
+  const userTurnOpen = useRef(false);
+  const aiTurnOpen = useRef(false);
   const [liveVolume, setLiveVolume] = useState(() => {
     if (typeof window === "undefined") return 0.8;
     const saved = Number(window.localStorage.getItem("relay_live_volume"));
@@ -247,6 +261,45 @@ export function Chat({
     },
     [],
   );
+  // Jump to a message opened from search, loading older pages if needed.
+  const focusMessage = useUI((s) => s.focusMessage);
+  const focusTries = useRef(0);
+  useEffect(() => {
+    if (!focusMessage) return;
+    const el = document.getElementById("message-" + focusMessage);
+    if (el) {
+      stick.current = false;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("message-focus");
+      window.setTimeout(() => el.classList.remove("message-focus"), 2200);
+      focusTries.current = 0;
+      useUI.getState().clearFocus();
+      return;
+    }
+    if (history.hasNextPage && !history.isFetchingNextPage && focusTries.current < 10) {
+      focusTries.current += 1;
+      void history.fetchNextPage();
+    } else if (!history.hasNextPage && !history.isPending) {
+      focusTries.current = 0;
+      useUI.getState().clearFocus();
+    }
+  }, [focusMessage, messages.length, history]);
+  // Persist unsent messages so a reload or crash doesn't lose them.
+  useEffect(() => {
+    saveOutbox(user.id, c.id, pending);
+  }, [pending, user.id, c.id]);
+  // Resend the outbox when the chat opens and whenever the network returns.
+  const sendRef = useRef<(m: Message) => Promise<void>>(async () => {});
+  useEffect(() => {
+    function flush() {
+      if (!navigator.onLine) return;
+      const queued = pendingRef.current.filter((m) => m.status === "failed");
+      void queued.reduce((chain, m) => chain.then(() => sendRef.current(m)), Promise.resolve());
+    }
+    flush();
+    window.addEventListener("online", flush);
+    return () => window.removeEventListener("online", flush);
+  }, []);
   async function sendMessage(message?: Message) {
     const text = message?.body ?? body.trim();
     if (!text && !uploadState?.id) return;
@@ -255,7 +308,7 @@ export function Chat({
       return;
     }
     setError("");
-    if (edit) {
+    if (edit && !message) {
       try {
         await mutate("/messages/" + edit.id, { body: text }, "PATCH");
         setEdit(null);
@@ -271,6 +324,9 @@ export function Chat({
       return;
     }
     const optimistic: Message = message || {
+      attachments: uploadState?.id
+        ? [{ id: uploadState.id, filename: uploadState.name, content_type: "", size: 0 }]
+        : [],
       id: crypto.randomUUID(),
       seq: Number.MAX_SAFE_INTEGER,
       client_id: crypto.randomUUID(),
@@ -283,7 +339,6 @@ export function Chat({
       edited: false,
       deleted: false,
       reactions: [],
-      attachments: [],
       status: "pending",
     };
     setPending((old) => [
@@ -300,13 +355,13 @@ export function Chat({
         client_id: optimistic.client_id,
         body: text,
         reply_id: optimistic.reply_id,
-        attachment_ids: uploadState?.id ? [uploadState.id] : [],
+        attachment_ids: optimistic.attachments.map((a) => a.id),
       });
       await history.refetch();
       setPending((old) =>
         old.filter((m) => m.client_id !== optimistic.client_id),
       );
-      setUploadState(null);
+      if (!message) setUploadState(null);
       void qc.invalidateQueries({ queryKey: ["conversations"] });
     } catch (e) {
       setPending((old) =>
@@ -317,8 +372,9 @@ export function Chat({
       setError((e as Error).message);
     }
   }
+  sendRef.current = sendMessage;
   async function askAI(
-    prompt: { body: string; client_id: string; voice?: boolean },
+    prompt: { body: string; client_id: string; voice?: boolean; language?: string },
     onDelta?: (text: string) => void,
   ) {
     setBody("");
@@ -375,7 +431,7 @@ export function Chat({
     });
     speaker.current = out;
     const answer = await askAI(
-      { body: text, client_id: crypto.randomUUID(), voice: true },
+      { body: text, client_id: crypto.randomUUID(), voice: true, language: getVoiceLanguage() },
       (delta) => {
         out.push(delta);
         setCaption((old) => old + delta);
@@ -415,6 +471,8 @@ export function Chat({
       setError("Set AI_API_KEY on the server to enable Relay AI.");
       return;
     }
+    // Unlock audio output synchronously inside the tap (required on iOS/Android).
+    unlockAudio();
     if (!permissionsGranted) {
       const perm = await checkVoicePermissions();
       if (!perm.allGranted) {
@@ -428,6 +486,7 @@ export function Chat({
   }
 
   function handlePermissionGranted() {
+    // The permission dialog already unlocked audio inside its button tap.
     setPermissionsGranted(true);
     if (pendingVoiceAction.current === "live") {
       void executeStartVoice();
@@ -452,40 +511,77 @@ export function Chat({
     held.current = false;
     setCaption("");
     setHeard("");
-    setVoice("thinking");
+    setVoice("connecting");
+    setLiveNotice("");
+    userTurnOpen.current = false;
+    aiTurnOpen.current = false;
     const live = new GeminiLiveVoice({
-      onReady: () => setVoice("listening"),
+      onReady: () => {
+        setLiveNotice("");
+        if (voiceOn.current && !held.current) setVoice(live.speaking ? "speaking" : "listening");
+      },
       onListening: (text) => {
-        setHeard(text);
-        setVoice("listening");
+        if (!text) return;
+        if (!userTurnOpen.current) {
+          userTurnOpen.current = true;
+          aiTurnOpen.current = false;
+          setHeard(text.trimStart());
+        } else {
+          setHeard((old) => old + text);
+        }
+        if (!held.current && !live.speaking) setVoice("listening");
       },
       onSpeaking: (text) => {
-        if (text) setCaption((old) => old + text);
-        setAiSpeakingLevel(0.65);
-        setVoice("speaking");
+        userTurnOpen.current = false;
+        if (text) {
+          if (!aiTurnOpen.current) {
+            aiTurnOpen.current = true;
+            setCaption(text.trimStart());
+          } else {
+            setCaption((old) => old + text);
+          }
+        }
+        if (!held.current) setVoice("speaking");
       },
       onInterrupted: () => {
-        setCaption("");
-        setVoice("listening");
+        aiTurnOpen.current = false;
+        setAiSpeakingLevel(0);
+        if (!held.current) setVoice("listening");
       },
       onTurnComplete: () => {
+        aiTurnOpen.current = false;
+      },
+      onPlaybackIdle: () => {
         setAiSpeakingLevel(0);
         if (voiceOn.current && !held.current) setVoice("listening");
       },
-      onLevel: setLiveMicLevel,
+      onLevel: (mic, out) => {
+        setLiveMicLevel(mic);
+        setAiSpeakingLevel(out);
+      },
+      onReconnecting: () => setLiveNotice("Connection dropped — reconnecting…"),
+      onBudget: (seconds) => {
+        if (seconds > 0 && seconds <= 5 * 60) {
+          const minutes = Math.max(1, Math.round(seconds / 60));
+          setLiveNotice(`${minutes} minute${minutes === 1 ? "" : "s"} of Live voice left`);
+          window.setTimeout(() => setLiveNotice((n) => (n.includes("left") ? "" : n)), 6000);
+        }
+      },
+      onSaved: () => void qc.invalidateQueries({ queryKey: ["messages", c.id] }),
       onError: (message) => {
         if (!voiceOn.current) return;
         liveVoice.current?.stop();
         liveVoice.current = null;
         voiceOn.current = false;
+        setLiveNotice("");
         setVoice("off");
-        setError(message + " Turn-based voice is still available after retrying.");
+        setError(message);
       },
     });
     liveVoice.current = live;
     live.setVolume(liveVolume);
     try {
-      await live.start(c.id);
+      await live.start(c.id, voiceLanguage);
       return;
     } catch {
       live.stop();
@@ -524,6 +620,7 @@ export function Chat({
     setHeard("");
     setCaption("");
     setLiveMicLevel(0);
+    setLiveNotice("");
   }
   function holdVoice() {
     held.current = true;
@@ -916,7 +1013,7 @@ export function Chat({
                 peers.length > 0 &&
                 peers.every((p) => p.delivered_seq >= m.seq);
               return (
-                <div key={m.id}>
+                <div key={m.id} id={"message-" + m.id}>
                   {showDate && (
                     <div className="date-separator">
                       <span>{day}</span>
@@ -998,13 +1095,26 @@ export function Chat({
                           (m.status === "pending" ? (
                             <Clock size={12} aria-label="Sending" />
                           ) : m.status === "failed" ? (
-                            <button
-                              className="retry-send"
-                              onClick={() => void sendMessage(m)}
-                            >
-                              <RotateCcw size={12} />
-                              Retry
-                            </button>
+                            <>
+                              <button
+                                className="retry-send"
+                                onClick={() => void sendMessage(m)}
+                              >
+                                <RotateCcw size={12} />
+                                Retry
+                              </button>
+                              <button
+                                className="retry-send"
+                                aria-label="Discard unsent message"
+                                onClick={() =>
+                                  setPending((old) =>
+                                    old.filter((x) => x.client_id !== m.client_id),
+                                  )
+                                }
+                              >
+                                Discard
+                              </button>
+                            </>
                           ) : (
                             <span
                               title={
@@ -1425,6 +1535,20 @@ export function Chat({
         state={voice}
         heard={heard}
         caption={caption}
+        notice={liveNotice}
+        language={voiceLanguage}
+        onLanguageChange={(code) => {
+          setVoiceLanguage(code);
+          setVoiceLanguageState(code);
+          if (liveVoice.current) {
+            setHeard("");
+            setCaption("");
+            userTurnOpen.current = false;
+            aiTurnOpen.current = false;
+            setVoice("connecting");
+            liveVoice.current.setLanguage(code);
+          }
+        }}
         level={
           voice === "speaking"
             ? aiSpeakingLevel

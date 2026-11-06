@@ -36,6 +36,23 @@ services:
         value: production
       - key: SECURE_COOKIES
         value: "true"
+      # Private file storage: any S3-compatible bucket (Cloudflare R2, AWS S3,
+      # Backblaze B2). Required for attachments; Render prompts for these.
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_BUCKET
+        value: relay-private
+      # Live voice cost controls (per user, UTC day).
+      - key: AI_VOICE_LANGUAGE
+        value: en-US
+      - key: AI_LIVE_DAILY_MINUTES
+        value: "60"
+      - key: AI_LIVE_MAX_SESSION_MINUTES
+        value: "30"
 
 databases:
   - name: relay-db

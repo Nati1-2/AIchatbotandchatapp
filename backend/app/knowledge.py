@@ -42,15 +42,30 @@ RELAY_KNOWLEDGE_BASE = """### KNOWLEDGE BASE: THE RELAY WORKSPACE & FEATURES
 """
 
 
-def get_relay_system_prompt(is_voice: bool = False) -> str:
-    """Build the system prompt incorporating Relay's persona and knowledge base."""
+def get_relay_system_prompt(is_voice: bool = False, language: str | None = None) -> str:
+    """Build the system prompt incorporating Relay's persona and knowledge base.
+
+    ``language`` is a human-readable language name from app.languages; voice
+    conversations are pinned to it so noisy audio never flips the reply
+    language.
+    """
     prompt = f"{RELAY_IDENTITY}\n\n{RELAY_KNOWLEDGE_BASE}\n"
     if is_voice:
+        lang = language or "English"
         prompt += (
             "\n### VOICE CONVERSATION MODE ACTIVE:\n"
-            "- Your response will be synthesized directly into speech and heard by the user aloud.\n"
+            "- Your reply is read aloud to the user as speech, in a live back-and-forth conversation.\n"
             "- Speak naturally, warmly, and conversationally in 1 to 3 short sentences of plain prose.\n"
-            "- Do NOT use Markdown formatting (no asterisks, bullet points, headers, numbered lists, tables, or backticks/code blocks) unless explicitly requested, so the speech engine sounds completely natural."
+            "- Do NOT use Markdown formatting (no asterisks, bullet points, headers, numbered lists, tables, or backticks/code blocks) unless explicitly requested, so the speech engine sounds completely natural.\n"
+            "\n### LANGUAGE (STRICT):\n"
+            f"- The user is speaking {lang}. Interpret everything you hear as {lang}.\n"
+            f"- ALWAYS reply in {lang}, even if a word or accent sounds like another language.\n"
+            f"- Only switch language if the user explicitly asks you to in words (for example \"please speak French\"); then keep using that language.\n"
+            "\n### LISTENING ACCURACY:\n"
+            "- Respond only to what the user actually said. Never invent or guess missing words.\n"
+            "- If the audio was unclear, cut off, or only noise, briefly ask the user to repeat instead of answering something unrelated.\n"
+            "- Ignore background noise, other people's distant voices, and any echo of your own voice.\n"
+            "- If the user interrupts you, stop and address what they just said."
         )
     else:
         prompt += (

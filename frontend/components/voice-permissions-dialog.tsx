@@ -1,9 +1,27 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { Mic, Volume2, AudioLines, ShieldCheck, AlertCircle, LoaderCircle } from "lucide-react";
-import { requestMandatoryPermissions } from "@/lib/voice";
+import {
+  AlertCircle,
+  Check,
+  LoaderCircle,
+  Lock,
+  Mic,
+  Monitor,
+  ShieldAlert,
+  Smartphone,
+  Volume2,
+} from "lucide-react";
+import {
+  checkVoicePermissions,
+  detectDevice,
+  microphoneHelpSteps,
+  requestMandatoryPermissions,
+} from "@/lib/voice";
+import { unlockAudio } from "@/lib/live-voice";
+
+type Status = "idle" | "requesting" | "granted" | "denied" | "insecure" | "unsupported";
 
 export function VoicePermissionsDialog({
   open,
@@ -14,151 +32,208 @@ export function VoicePermissionsDialog({
   onOpenChange: (open: boolean) => void;
   onGranted: () => void;
 }) {
-  const [status, setStatus] = useState<"idle" | "requesting" | "denied">("idle");
-  const [errorDetail, setErrorDetail] = useState<string>("");
+  const [status, setStatus] = useState<Status>("idle");
+  const [errorDetail, setErrorDetail] = useState("");
+  const device = useMemo(() => (typeof navigator === "undefined" ? null : detectDevice()), []);
+  const steps = device ? microphoneHelpSteps(device) : [];
+
+  // Pre-flight: detect blocked/insecure states before the user taps anything,
+  // and continue automatically if they fix the permission in browser settings.
+  useEffect(() => {
+    if (!open) return;
+    setErrorDetail("");
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setStatus("insecure");
+      return;
+    }
+    setStatus("idle");
+    let perm: PermissionStatus | null = null;
+    let cancelled = false;
+    void checkVoicePermissions().then((result) => {
+      if (cancelled) return;
+      if (result.microphone === "unsupported") setStatus("unsupported");
+      else if (result.microphone === "denied") setStatus("denied");
+    });
+    try {
+      void navigator.permissions
+        ?.query({ name: "microphone" as PermissionName })
+        .then((p) => {
+          if (cancelled) return;
+          perm = p;
+          p.onchange = () => {
+            if (p.state === "granted") setStatus((s) => (s === "denied" ? "idle" : s));
+            if (p.state === "denied") setStatus("denied");
+          };
+        })
+        .catch(() => {});
+    } catch {}
+    return () => {
+      cancelled = true;
+      if (perm) perm.onchange = null;
+    };
+  }, [open]);
 
   async function handleGrant() {
+    // Must run synchronously inside the tap so iOS/Android allow audio output.
+    unlockAudio();
     setStatus("requesting");
     setErrorDetail("");
     const result = await requestMandatoryPermissions();
     if (result.success) {
-      setStatus("idle");
+      setStatus("granted");
       onOpenChange(false);
       onGranted();
-    } else {
-      setStatus("denied");
-      setErrorDetail(
-        result.error ||
-          "Microphone permission was denied or blocked. Please allow microphone access in your browser settings to use real-time voice chat.",
-      );
+      return;
     }
+    setStatus(result.code === "unsupported" ? "unsupported" : "denied");
+    setErrorDetail(result.error || "");
   }
+
+  const busy = status === "requesting";
+  const blocked = status === "denied" || status === "insecure" || status === "unsupported";
+  const DeviceIcon = device?.mobile ? Smartphone : Monitor;
 
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (status !== "requesting") {
-          onOpenChange(next);
-        }
+        if (!busy) onOpenChange(next);
       }}
-      title="Voice AI Permissions Required"
-      description="Mandatory audio and microphone permissions are required before starting real-time simultaneous voice talks."
+      title="Talk with Relay Live"
+      description="Real-time voice conversation that listens and speaks at the same time."
     >
-      <div className="voice-permissions-container">
-        <div className="voice-permissions-header">
-          <div className="voice-permissions-icon-badge">
-            <ShieldCheck size={28} />
-          </div>
-          <div className="voice-permissions-intro">
-            <h4>Mandatory Permissions for Voice Talks</h4>
-            <p>
-              To experience seamless, real-time simultaneous voice conversation with Relay AI,
-              the following permissions must be granted:
-            </p>
-          </div>
+      <div className={`vp ${blocked ? "vp-blocked" : ""}`}>
+        <div className="vp-hero" aria-hidden="true">
+          <span className={`vp-mic ${busy ? "vp-mic-busy" : ""}`}>
+            {blocked ? <ShieldAlert size={30} /> : <Mic size={30} />}
+          </span>
         </div>
 
-        <ul className="voice-permissions-list">
-          <li className="voice-permission-item">
-            <div className="voice-perm-icon">
-              <Mic size={20} />
-            </div>
-            <div className="voice-perm-info">
-              <div className="voice-perm-title-row">
-                <strong>Microphone Access</strong>
-                <span className="voice-perm-badge mandatory">Mandatory</span>
-              </div>
-              <p>
-                Captures your voice in real time so Relay AI can hear you and transcribe what you
-                say simultaneously.
-              </p>
-            </div>
+        <ul className="vp-list">
+          <li>
+            <span className="vp-icon"><Mic size={18} /></span>
+            <span className="vp-text">
+              <strong>Microphone</strong>
+              <span>So Relay can hear you and you can interrupt anytime</span>
+            </span>
+            <PermState status={status} />
           </li>
-
-          <li className="voice-permission-item">
-            <div className="voice-perm-icon">
-              <Volume2 size={20} />
-            </div>
-            <div className="voice-perm-info">
-              <div className="voice-perm-title-row">
-                <strong>Audio Playback & Output</strong>
-                <span className="voice-perm-badge mandatory">Mandatory</span>
-              </div>
-              <p>
-                Authorizes the browser to stream spoken AI responses back to you with zero latency
-                without autoplay interruption.
-              </p>
-            </div>
-          </li>
-
-          <li className="voice-permission-item">
-            <div className="voice-perm-icon">
-              <AudioLines size={20} />
-            </div>
-            <div className="voice-perm-info">
-              <div className="voice-perm-title-row">
-                <strong>Real-Time Duplex & Voice Interruption</strong>
-                <span className="voice-perm-badge mandatory">Mandatory</span>
-              </div>
-              <p>
-                Enables simultaneous listening and speaking, allowing you to interrupt the AI
-                naturally with your voice at any time.
-              </p>
-            </div>
+          <li>
+            <span className="vp-icon"><Volume2 size={18} /></span>
+            <span className="vp-text">
+              <strong>Sound</strong>
+              <span>Relay’s voice plays instantly — turn up your volume</span>
+            </span>
+            <PermState status={status === "granted" ? "granted" : status === "requesting" ? "requesting" : "idle"} />
           </li>
         </ul>
 
-        {status === "denied" && (
-          <div className="voice-permission-denied-box" role="alert">
-            <div className="voice-denied-heading">
-              <AlertCircle size={18} />
-              <strong>Permission Blocked or Denied</strong>
+        {status === "insecure" && (
+          <div className="vp-alert" role="alert">
+            <div className="vp-alert-head">
+              <AlertCircle size={17} />
+              <strong>A secure connection is required</strong>
             </div>
-            <p className="voice-denied-desc">{errorDetail}</p>
-            <div className="voice-denied-steps">
-              <p className="steps-title">How to enable microphone in your browser:</p>
-              <ol>
-                <li>Click the <strong>lock / site settings icon</strong> (🔒) in your browser’s address bar.</li>
-                <li>Find <strong>Microphone</strong> and switch it from <em>Block</em> to <strong>Allow</strong>.</li>
-                <li>Ensure <strong>Sound</strong> is also permitted.</li>
-                <li>Click <strong>Try Again</strong> below to re-verify permissions.</li>
-              </ol>
-            </div>
+            <p>
+              Browsers only allow the microphone on <b>https://</b> pages or <b>localhost</b>. You’re
+              on <code>{typeof location !== "undefined" ? location.origin : ""}</code>. Open Relay over
+              HTTPS to use voice on this device.
+            </p>
           </div>
         )}
 
-        <div className="dialog-actions voice-permission-actions">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={status === "requesting"}
-          >
-            Cancel
-          </Button>
+        {status === "unsupported" && (
+          <div className="vp-alert" role="alert">
+            <div className="vp-alert-head">
+              <AlertCircle size={17} />
+              <strong>Voice isn’t supported here</strong>
+            </div>
+            <p>
+              {errorDetail ||
+                "This browser can’t capture audio. Try the latest Chrome, Edge, Safari, or Firefox."}
+            </p>
+          </div>
+        )}
 
-          <Button
-            type="button"
-            variant="default"
-            className="voice-grant-btn"
-            onClick={handleGrant}
-            disabled={status === "requesting"}
-          >
-            {status === "requesting" ? (
-              <>
-                <LoaderCircle size={16} className="spin" />
-                <span>Checking Permissions…</span>
-              </>
-            ) : status === "denied" ? (
-              "Try Again & Grant Permissions"
-            ) : (
-              "Grant Mandatory Permissions & Start Voice"
+        {status === "denied" && (
+          <div className="vp-alert" role="alert">
+            <div className="vp-alert-head">
+              <AlertCircle size={17} />
+              <strong>Microphone is blocked</strong>
+            </div>
+            {errorDetail && <p>{errorDetail}</p>}
+            {device && (
+              <div className="vp-steps">
+                <span className="vp-device">
+                  <DeviceIcon size={14} /> {device.label}
+                </span>
+                <ol>
+                  {steps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ol>
+              </div>
             )}
+          </div>
+        )}
+
+        <p className="vp-privacy">
+          <Lock size={13} />
+          The mic is only on while Live is open. Mute or end anytime.
+        </p>
+
+        <div className="dialog-actions vp-actions">
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+            Not now
           </Button>
+          {status !== "insecure" && status !== "unsupported" && (
+            <Button type="button" className="vp-grant" onClick={handleGrant} disabled={busy}>
+              {busy ? (
+                <>
+                  <LoaderCircle size={16} className="spin" />
+                  <span>Waiting for permission…</span>
+                </>
+              ) : status === "denied" ? (
+                "Try again"
+              ) : (
+                <>
+                  <Mic size={16} />
+                  <span>Allow microphone &amp; start</span>
+                </>
+              )}
+            </Button>
+          )}
         </div>
+        {busy && (
+          <p className="vp-tip">
+            {device?.mobile
+              ? "Tap “Allow” in the prompt that just appeared."
+              : "Choose “Allow” in the prompt near your address bar."}
+          </p>
+        )}
       </div>
     </Dialog>
   );
 }
 
+function PermState({ status }: { status: Status }) {
+  if (status === "granted")
+    return (
+      <span className="vp-state vp-ok" aria-label="Allowed">
+        <Check size={14} />
+      </span>
+    );
+  if (status === "requesting")
+    return (
+      <span className="vp-state" aria-label="Waiting">
+        <LoaderCircle size={14} className="spin" />
+      </span>
+    );
+  if (status === "denied" || status === "insecure" || status === "unsupported")
+    return (
+      <span className="vp-state vp-bad" aria-label="Blocked">
+        <AlertCircle size={14} />
+      </span>
+    );
+  return <span className="vp-state vp-need">Needed</span>;
+}

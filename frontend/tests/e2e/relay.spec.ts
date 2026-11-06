@@ -57,7 +57,8 @@ test("two users exchange messages, reconnect, create a group, upload, and use te
     .filter({ hasText: "Alex Morgan" })
     .first()
     .click();
-  await expect(b.getByText(missed, { exact: true })).toBeVisible();
+  // Scope to message bodies: the sidebar preview shows the same text.
+  await expect(b.locator(".message-body").filter({ hasText: missed })).toBeVisible();
   await a.getByRole("button", { name: "Attach a file", exact: true }).click();
   await a.locator("input[type=file]").setInputFiles({
     name: "hello.txt",

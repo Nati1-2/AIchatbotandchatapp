@@ -1,4 +1,5 @@
-import hashlib, secrets
+import hashlib, ipaddress, secrets
+from urllib.parse import urlsplit
 from datetime import timedelta, timezone
 from argon2 import PasswordHasher
 from fastapi import Depends, HTTPException, Request
@@ -10,18 +11,47 @@ from .config import ai_available, settings
 hasher = PasswordHasher()
 
 
+def is_local_origin(origin: str) -> bool:
+    """localhost, loopback, private-network IPs and *.local hosts.
+
+    Development trusts these so the app can be opened from a phone on the same
+    Wi-Fi, without trusting arbitrary websites.
+    """
+    try:
+        host = (urlsplit(origin).hostname or "").lower()
+    except ValueError:
+        return False
+    if host in ("localhost", "::1") or host.endswith(".localhost") or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
+def trusted_origin(origin: str) -> bool:
+    """Origins allowed to make credentialed cross-origin requests (CORS)."""
+    origin = origin.rstrip("/")
+    if settings.frontend_origin and origin == settings.frontend_origin.rstrip("/"):
+        return True
+    return settings.environment != "production" and is_local_origin(origin)
+
+
+def same_origin(origin: str, headers) -> bool:
+    host = headers.get("x-forwarded-host") or headers.get("host") or ""
+    # Some proxy chains append values. The first value is the public-facing
+    # scheme supplied by the edge proxy.
+    proto = (headers.get("x-forwarded-proto") or "https").split(",", 1)[0].strip()
+    return origin.rstrip("/") == f"{proto}://{host}".rstrip("/")
+
+
 def valid_request_origin(request: Request) -> bool:
-    """Return whether a browser request came from this deployment's origin."""
+    """Return whether a browser request came from a trusted origin."""
     origin = (request.headers.get("origin") or "").rstrip("/")
     if not origin:
         return True
-    if settings.frontend_origin and origin == settings.frontend_origin.rstrip("/"):
-        return True
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
-    # Some proxy chains append values. The first value is the public-facing
-    # scheme supplied by the edge proxy.
-    proto = (request.headers.get("x-forwarded-proto") or "https").split(",", 1)[0].strip()
-    return origin == f"{proto}://{host}".rstrip("/") or settings.environment != "production"
+    return trusted_origin(origin) or same_origin(origin, request.headers)
 
 
 def digest(token):

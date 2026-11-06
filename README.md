@@ -25,6 +25,19 @@ attached to a text box.
   animated waves show thinking and speaking states.
 - **Interruptible.** Tap the waveform while Relay is speaking to jump in.
 - **Hold and resume.** Pause the conversation without leaving Live mode.
+- **Your language, pinned.** Pick from 15 languages (English by default). Relay
+  listens and replies only in that language and asks you to repeat when the
+  audio was unclear, instead of guessing.
+- **Built for real rooms.** Background noise isn't treated as speech, and the
+  assistant's own voice is gated out of the microphone while it talks.
+- **Remembers the conversation.** Live starts with the recent chat as context,
+  every spoken exchange is saved to the chat history, and reconnects resume
+  the same Gemini session.
+- **Live captions** for both sides, with a toggle.
+- **Phone-ready.** Audio unlocks correctly on iOS/Android, the screen stays
+  awake, and the permission screen gives device-specific fix-it steps.
+- **Cost controls.** Per-user daily Live minutes, a maximum session length, and
+  one active session per user (a newer tab or device takes over).
 - **Private context.** The AI receives only the current Relay AI conversation.
   API keys remain on the server.
 
@@ -37,7 +50,12 @@ fallback when real-time audio cannot initialize.
 Relay is also a complete direct and group messaging experience. PostgreSQL is
 the source of truth, while Redis and WebSockets deliver live updates.
 
-- Direct messages and owner-managed group chats
+- Direct messages and owner-managed group chats, with ownership transfer,
+  leaving and deleting groups
+- Search across all of your conversations, jumping straight to the message
+- Unsent messages survive a reload and are resent automatically when you're
+  back online
+- Desktop notifications and a message chime (respecting muted chats)
 - Optimistic sending with retry and idempotent persistence
 - Replies, edits, tombstone deletion and six reactions
 - Typing, online presence, unread counts and delivery/read receipts
@@ -68,9 +86,14 @@ Then start the entire stack:
 npm run dev
 ```
 
-This command starts Docker Desktop when necessary, waits for PostgreSQL, Redis
-and private object storage, runs migrations, and launches the API, worker and
-frontend in the same terminal.
+This command starts Docker when necessary, waits for PostgreSQL, Redis and
+private object storage, runs migrations, and launches the API, worker and
+frontend in the same terminal. If Docker isn't installed it says so and
+suggests `npm run dev:lite`.
+
+To try voice on a phone, open the app over HTTPS (for example through a tunnel
+such as `cloudflared` or `ngrok`): browsers only allow the microphone on
+`https://` pages or `localhost`.
 
 - App: <http://localhost:3000>
 - API docs: <http://localhost:8000/docs>
@@ -92,19 +115,24 @@ sequenceDiagram
     participant U as User
     participant B as Browser
     participant A as Relay API
-    participant G as Gemini
+    participant G as Gemini Live
 
-    B->>U: Speak opening greeting
-    U->>B: Talk naturally
-    B->>A: Transcript after pause
-    A->>G: Stream conversation context
-    G-->>A: Response tokens
-    A-->>B: Server-sent events
-    B->>A: Request speech audio
-    A->>G: Gemini TTS
-    G-->>A: WAV audio
-    A-->>B: Play reply + animate waveform
-    B->>U: Resume listening
+    B->>A: WebSocket (language, session cookie)
+    A->>A: Auth, daily budget, one-session lock
+    A->>G: Setup (voice, language rules, VAD, resumption)
+    A->>G: Recent chat history as context
+    G-->>B: Spoken greeting (24 kHz PCM) + captions
+    loop Full duplex
+        U->>B: Speech
+        B->>A: 16 kHz PCM frames (20 ms, echo-gated)
+        A->>G: realtimeInput audio
+        G-->>A: Transcripts + reply audio
+        A-->>B: Audio plays immediately, captions update
+        A->>A: Save the exchange to chat history
+    end
+    U-->>B: Talks over the reply
+    B->>B: Duck reply instantly
+    G-->>B: interrupted → queued audio cleared
 ```
 
 ## Architecture
@@ -116,15 +144,16 @@ sequenceDiagram
 | Data | PostgreSQL, Alembic | Users, conversations, messages, receipts and AI usage |
 | Realtime | Redis, native WebSockets | Events, presence, typing, rate limits and AI locks |
 | Files | RustFS/S3-compatible storage | Private uploads and authorized downloads |
-| AI | Gemini chat completions + Gemini TTS | Streamed responses and natural spoken replies |
+| AI | Gemini chat completions, Gemini Live, Gemini TTS | Streamed text, real-time voice, and spoken fallback replies |
 
 The backend stores server-side sessions in HttpOnly cookies, validates CSRF and
 request origins, hashes passwords with Argon2, rate-limits authentication and AI
 requests, and never exposes the provider key to the frontend.
 
 Relay is **not end-to-end encrypted**. The server can read message content. The
-current release also does not include person-to-person calls, push notifications,
-password recovery or MFA.
+current release also does not include person-to-person calls, push
+notifications to closed apps, password recovery or MFA. See
+[`docs/STATUS.md`](docs/STATUS.md) for what each would need.
 
 ## Development and verification
 

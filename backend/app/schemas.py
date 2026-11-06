@@ -46,6 +46,10 @@ class MemberInput(BaseModel):
     role: Literal["admin", "member"] = "member"
 
 
+class TransferInput(BaseModel):
+    user_id: UUID
+
+
 class ReactionInput(BaseModel):
     emoji: Literal["👍", "❤️", "😂", "🎉", "👀", "🙏"]
 
@@ -56,6 +60,7 @@ class AIInput(BaseModel):
     selected_ids: list[UUID] = Field(default_factory=list, max_length=30)
     selected_snapshots: dict[str, str] = Field(default_factory=dict, max_length=30)
     voice: bool = False  # the reply will be read aloud in voice mode
+    language: str | None = Field(default=None, max_length=16)  # BCP-47, see app/languages.py
 
 
 class SpeechInput(BaseModel):
@@ -65,3 +70,4 @@ class SpeechInput(BaseModel):
 class TranscriptionInput(BaseModel):
     audio: str = Field(min_length=1, max_length=8_000_000)
     mime_type: str = Field(pattern=r"^audio/[a-zA-Z0-9.+-]+(?:;.*)?$")
+    language: str | None = Field(default=None, max_length=16)

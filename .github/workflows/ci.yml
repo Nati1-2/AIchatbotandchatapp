@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, c1]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -98,3 +98,21 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Render
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [frontend, backend, container]
+    if: github.event_name == 'push'
+    environment: production
+    steps:
+      - name: Trigger Render deployment
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL is not configured; skipping deployment."
+            exit 0
+          fi
+          curl --fail --show-error --silent --request POST "$RENDER_DEPLOY_HOOK_URL"

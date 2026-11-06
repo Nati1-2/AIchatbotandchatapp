@@ -1,10 +1,27 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Mic, MicOff, Sparkles, Volume2, X, Radio } from "lucide-react";
+import { Captions, CaptionsOff, Globe, Mic, MicOff, Sparkles, Volume2, X, Radio, Wifi } from "lucide-react";
 import { speakable } from "@/lib/voice";
+import { VOICE_LANGUAGES, type VoiceLanguage } from "@/lib/languages";
 
-export type VoiceState = "off" | "listening" | "thinking" | "speaking" | "held";
+export type VoiceState = "off" | "connecting" | "listening" | "thinking" | "speaking" | "held";
+
+const STATUS: Record<Exclude<VoiceState, "off">, [string, string]> = {
+  connecting: ["Connecting", "Opening a real-time line to Relay…"],
+  listening: ["Listening", "Talk naturally — no need to press anything"],
+  thinking: ["Thinking", "Working on a reply"],
+  speaking: ["Speaking", "Start talking anytime to interrupt"],
+  held: ["Microphone off", "Tap Unmute when you're ready to talk"],
+};
+
+function readCaptionsPref() {
+  try {
+    return window.localStorage.getItem("relay_live_captions") !== "off";
+  } catch {
+    return true;
+  }
+}
 
 /** Full-screen hands-free full-duplex voice conversation. */
 export function VoiceLive({
@@ -12,6 +29,9 @@ export function VoiceLive({
   heard,
   caption,
   level,
+  notice,
+  language,
+  onLanguageChange,
   onHold,
   onResume,
   onInterrupt,
@@ -20,9 +40,15 @@ export function VoiceLive({
   onEnd,
 }: {
   state: VoiceState;
+  /** What the user said most recently (live transcription). */
   heard: string;
+  /** The assistant's current or most recent reply. */
   caption: string;
   level: number;
+  /** Transient connection notice, e.g. while reconnecting. */
+  notice?: string;
+  language: VoiceLanguage;
+  onLanguageChange: (language: VoiceLanguage) => void;
   onHold: () => void;
   onResume: () => void;
   onInterrupt: () => void;
@@ -34,38 +60,43 @@ export function VoiceLive({
   const onEndRef = useRef(onEnd);
   onEndRef.current = onEnd;
   const open = state !== "off";
+  const [captions, setCaptions] = useState(true);
 
   useEffect(() => {
     if (!open) return;
+    setCaptions(readCaptionsPref());
     end.current?.focus();
-    const key = (e: KeyboardEvent) => e.key === "Escape" && onEndRef.current();
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onEndRef.current();
+    };
     document.addEventListener("keydown", key);
-    return () => document.removeEventListener("keydown", key);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", key);
+      document.body.style.overflow = overflow;
+    };
   }, [open]);
 
   if (!open || typeof document === "undefined") return null;
 
-  // Show the tail of the spoken reply, like live captions.
+  function toggleCaptions() {
+    setCaptions((on) => {
+      try {
+        window.localStorage.setItem("relay_live_captions", on ? "off" : "on");
+      } catch {}
+      return !on;
+    });
+  }
+
+  // Show the tail of each side, like live captions.
   const spoken = speakable(caption);
-  const tail = spoken.length > 260 ? "…" + spoken.slice(-260) : spoken;
-
-  const status =
-    state === "listening"
-      ? "Listening in Real Time"
-      : state === "thinking"
-        ? "Thinking"
-        : state === "speaking"
-          ? "Speaking"
-          : "Microphone Muted";
-
-  const statusDetail =
-    state === "listening"
-      ? "Speak naturally — Gemini is listening continuously"
-      : state === "thinking"
-        ? "Putting together a real-time response"
-        : state === "speaking"
-          ? "Full duplex is active — speak anytime to interrupt"
-          : "Tap unmute when you’re ready to talk";
+  const aiTail = spoken.length > 220 ? "…" + spoken.slice(-220).trimStart() : spoken;
+  const you = heard.trim();
+  const youTail = you.length > 140 ? "…" + you.slice(-140).trimStart() : you;
+  const [status, detail] = STATUS[state];
+  const userActive = state === "listening" && !!youTail;
+  const aiActive = state === "speaking";
 
   return createPortal(
     <div
@@ -73,46 +104,83 @@ export function VoiceLive({
       role="dialog"
       aria-modal="true"
       aria-label="Real-time voice conversation with Relay AI"
-      style={{ "--level": level } as React.CSSProperties}
+      style={{ "--level": Math.min(1, level) } as React.CSSProperties}
     >
       <header className="live-top">
         <span className="live-badge">
           <Sparkles size={15} />
-          Relay Live · Real-Time Full Duplex
+          Relay Live
+          <span className={`live-dot ${state === "connecting" || notice ? "live-dot-wait" : ""}`} />
         </span>
+        <label className="live-lang" title="Language you speak — Relay replies in it">
+          <Globe size={16} aria-hidden="true" />
+          <select
+            aria-label="Conversation language"
+            value={language}
+            onChange={(e) => onLanguageChange(e.target.value as VoiceLanguage)}
+          >
+            {VOICE_LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="live-icon-btn"
+          aria-pressed={captions}
+          aria-label={captions ? "Hide captions" : "Show captions"}
+          onClick={toggleCaptions}
+        >
+          {captions ? <Captions size={20} /> : <CaptionsOff size={20} />}
+        </button>
       </header>
+
+      {notice && (
+        <div className="live-notice" role="status">
+          <Wifi size={14} />
+          {notice}
+        </div>
+      )}
 
       <div
         className="live-captions"
         aria-live="polite"
-        onClick={state === "speaking" ? onInterrupt : undefined}
+        onClick={aiActive ? onInterrupt : undefined}
       >
-        {state === "listening" && (
-          <p className={heard ? "live-user" : "live-hint"}>
-            {heard || "Go ahead, I’m listening in real time…"}
-          </p>
-        )}
-        {state === "thinking" && (
+        {state === "connecting" ? (
+          <span className="live-dots" aria-label="Connecting">
+            <i />
+            <i />
+            <i />
+          </span>
+        ) : state === "held" ? (
+          <p className="live-hint">Relay is paused. Your microphone is off.</p>
+        ) : !captions ? null : (
           <>
-            <p className="live-user live-dim">{heard}</p>
-            <span className="live-dots" aria-label="Thinking">
-              <i />
-              <i />
-              <i />
-            </span>
+            {(youTail || state === "listening") && (
+              <p className={`live-user ${userActive ? "" : "live-dim"} ${youTail ? "" : "live-hint"}`}>
+                {youTail || "Go ahead, I'm listening…"}
+              </p>
+            )}
+            {state === "thinking" && (
+              <span className="live-dots" aria-label="Thinking">
+                <i />
+                <i />
+                <i />
+              </span>
+            )}
+            {aiTail && state !== "listening" && state !== "thinking" && (
+              <p className="live-ai">{aiTail}</p>
+            )}
+            {aiActive && (
+              <div className="live-duplex-pill">
+                <Radio size={12} className="live-pulse" />
+                <span>Just talk to interrupt</span>
+              </div>
+            )}
           </>
-        )}
-        {state === "speaking" && (
-          <>
-            <p className="live-ai">{tail || "…"}</p>
-            <div className="live-duplex-pill">
-              <Radio size={12} className="live-pulse" />
-              <span>Speak naturally to interrupt at any time</span>
-            </div>
-          </>
-        )}
-        {state === "held" && (
-          <p className="live-hint">Your microphone is muted.</p>
         )}
       </div>
 
@@ -120,17 +188,13 @@ export function VoiceLive({
         <button
           type="button"
           className="live-orb"
-          aria-label={
-            state === "speaking"
-              ? "Interrupt and talk"
-              : `Relay AI: ${status}`
-          }
-          onClick={state === "speaking" ? onInterrupt : undefined}
-          tabIndex={state === "speaking" ? 0 : -1}
+          aria-label={aiActive ? "Interrupt and talk" : `Relay AI: ${status}`}
+          onClick={aiActive ? onInterrupt : state === "held" ? onResume : undefined}
+          tabIndex={aiActive || state === "held" ? 0 : -1}
         >
           <span className="live-orb-aura" />
           <span className="live-orb-core">
-            {state === "listening" ? <Mic size={28} /> : <Volume2 size={28} />}
+            {state === "held" ? <MicOff size={26} /> : state === "speaking" ? <Volume2 size={26} /> : <Mic size={26} />}
           </span>
           <span className="live-wave" aria-hidden="true">
             {Array.from({ length: 19 }, (_, index) => (
@@ -148,7 +212,7 @@ export function VoiceLive({
         </button>
         <div className="live-state" role="status">
           <strong>{status}</strong>
-          <span>{statusDetail}</span>
+          <span>{detail}</span>
         </div>
       </div>
 
@@ -156,7 +220,10 @@ export function VoiceLive({
         <span className="live-control">
           <button
             type="button"
+            className={state === "held" ? "live-on" : ""}
             aria-label={state === "held" ? "Unmute microphone" : "Mute microphone"}
+            aria-pressed={state === "held"}
+            disabled={state === "connecting"}
             onClick={state === "held" ? onResume : onHold}
           >
             {state === "held" ? <Mic size={24} /> : <MicOff size={24} />}

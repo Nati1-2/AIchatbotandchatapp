@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     ai_model: str = "gemini-2.5-flash"
     ai_tts_model: str = "gemini-2.5-flash-preview-tts"
     ai_live_model: str = "gemini-3.8-live"
+    # Default conversation language for voice (BCP-47, see app/languages.py).
+    ai_voice_language: str = "en-US"
+    # Live voice cost controls (per user, UTC day).
+    ai_live_daily_minutes: int = 60
+    ai_live_max_session_minutes: int = 30
     ai_daily_limit: int = 50
     ai_timeout_seconds: int = 60
     ai_context_chars: int = 24000

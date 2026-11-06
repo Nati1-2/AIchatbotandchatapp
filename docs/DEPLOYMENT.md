@@ -3,14 +3,17 @@
 ## CI/CD
 
 GitHub Actions runs `.github/workflows/ci.yml` for every pull request and every
-push to `main`. It type-checks, tests, and builds the frontend; compiles and
+push to `main` or `c1`. It type-checks, tests, and builds the frontend; compiles and
 tests the backend; and then builds the same production Docker image used by
 Render. Concurrent runs for an outdated commit are cancelled automatically.
 
-The Render Blueprint uses `autoDeployTrigger: checksPass`, so a push to `main`
-is deployed only after the workflow succeeds. In Render, keep the repository's
-GitHub connection authorized to report checks. Protecting `main` with the
-`Frontend`, `Backend`, and `Production container` checks is recommended.
+After those checks pass on a push, the `Deploy to Render` job calls Render's
+deploy hook. Add the hook URL as a GitHub Actions repository secret named
+`RENDER_DEPLOY_HOOK_URL`, and protect the `production` GitHub environment if
+deployment approval is required. If the secret is absent, CI still succeeds and
+reports that deployment was skipped. Disable Render's native auto-deploy for the
+service so a commit cannot deploy before CI finishes. Protecting `main` and `c1`
+with the `Frontend`, `Backend`, and `Production container` checks is recommended.
 
 ## Render (one-click Blueprint)
 
@@ -79,8 +82,19 @@ Deploy frontend and API on **same-site sibling HTTPS domains**, such as `app.exa
 
 ## Operations and limits
 
-Run one or more workers; row locks coordinate processing. Keep the S3 bucket private. Add a malware-scanning service before offering unrestricted document distribution; current processing validates allowed types and image safety, not malicious PDF payloads. Apply a proxy request-size limit consistent with the 10 MB application limit and short upload timeouts. Regularly reconcile S3 objects against metadata to remove crash-orphan objects that never acquired a database row.
+Run one or more workers; row locks coordinate processing. Keep the S3 bucket private. Add a malware-scanning service before offering unrestricted document distribution; current processing validates allowed types and image safety, not malicious PDF payloads. Apply a proxy request-size limit consistent with the 10 MB application limit and short upload timeouts. The worker sweeps the bucket hourly and deletes objects older than one hour that have no attachment row (crash orphans and files of deleted groups); its credentials therefore need list and delete permission on the bucket.
 
 Database backups, restores, TLS certificates, secret rotation, alerting, capacity tests, and retention policy are deployment responsibilities. This first version polls conversation metadata and revalidates history for correctness; high-volume installations should batch list queries and introduce a durable outbox/change feed before scaling fan-out aggressively. A Redis outage affects login rate limiting, presence, listing and live events; it does not erase persisted messages. There is no claim of end-to-end encryption.
 
 The local Compose file binds ports to loopback, uses development credentials, seeds demo users, and is not a production manifest.
+
+## Relay Live voice
+
+- `AI_LIVE_MODEL` must be a Gemini Live model your key can use. Verify it once after deploy: open Live and confirm the spoken greeting.
+- Cost controls (per user, UTC day): `AI_LIVE_DAILY_MINUTES` (default 60) and `AI_LIVE_MAX_SESSION_MINUTES` (default 30). One live session per user; a newer tab or device takes over.
+- `AI_VOICE_LANGUAGE` sets the default conversation language (BCP-47, e.g. `en-US`); users can change it in Live.
+- The proxy must pass WebSocket upgrades for `/ai/live/` and `/ws` with long read timeouts (see `nginx.conf`). Browsers only allow the microphone over HTTPS.
+
+## All-in-one container (Render)
+
+`Dockerfile` + `entrypoint.sh` run Nginx, the API, the Next.js server and the worker in one container. Migrations run on start and abort startup if they fail. `render.yaml` provisions PostgreSQL and Redis; you must supply an S3-compatible bucket (`S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`) for attachments. `/ready` returns 503 in production when Redis is unreachable.

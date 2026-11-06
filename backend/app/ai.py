@@ -12,6 +12,7 @@ from .schemas import AIInput, SpeechInput, TranscriptionInput
 from .security import current_user, member
 from .events import limit, publish, r
 from .knowledge import get_relay_system_prompt
+from .languages import resolve_language
 
 router = APIRouter()
 log = logging.getLogger("relay.ai")
@@ -100,7 +101,7 @@ class Provider:
             return output.getvalue()
         return raw
 
-    async def transcribe(self, audio: str, mime_type: str):
+    async def transcribe(self, audio: str, mime_type: str, language: str = "English"):
         """Transcribe recorded browser audio with Gemini, without Web Speech."""
         base = settings.ai_base_url.rstrip("/")
         if base.endswith("/openai"):
@@ -116,7 +117,7 @@ class Provider:
                     "contents": [{
                         "role": "user",
                         "parts": [
-                            {"text": "Transcribe this speech exactly. Return only the spoken words. If there is no intelligible speech, return an empty response."},
+                            {"text": f"The speaker is talking in {language}. Transcribe this speech exactly, in {language}. Return only the spoken words. Do not translate. If there is no intelligible speech, return an empty response."},
                             {"inlineData": {"mimeType": mime_type.split(";")[0], "data": audio}},
                         ],
                     }],
@@ -217,7 +218,9 @@ async def transcribe_speech(data: TranscriptionInput, user=Depends(current_user)
         # Reject oversized decoded recordings before sending them upstream.
         if len(data.audio) > 8_000_000:
             raise ValueError("Recording is too large")
-        text = await provider.transcribe(data.audio, data.mime_type)
+        text = await provider.transcribe(
+            data.audio, data.mime_type, language=resolve_language(data.language)[1]
+        )
     except Exception as exc:
         log.exception("Gemini transcription failed: %s", exc)
         raise HTTPException(502, "Relay could not understand that recording.")
@@ -331,7 +334,9 @@ async def generate(
             0,
             {
                 "role": "system",
-                "content": get_relay_system_prompt(is_voice=bool(data.voice)),
+                "content": get_relay_system_prompt(
+                    is_voice=bool(data.voice), language=resolve_language(data.language)[1]
+                ),
             },
         )
         g = Generation(user_id=user.id, conversation_id=cid)
